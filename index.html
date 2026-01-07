@@ -1,15 +1,38 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
-  <head>
-    <meta charset="UTF-8" />
-    <title>PrintTech Manager</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+<html>
+<body>
+  <h1>PrintTech</h1>
 
-  </head>
-  <body>
-    <div id="root"></div>
+  <input id="nome" placeholder="Nome do cliente" />
+  <button onclick="add()">Adicionar</button>
 
-    <!-- 👇 aponta direto pro index.tsx da raiz -->
-    <script type="module" src="/index.tsx"></script>
-  </body>
+  <ul id="lista"></ul>
+
+  <script>
+    const sqlite3 = require("sqlite3").verbose();
+    const { remote } = require("electron");
+    const path = require("path");
+
+    const dbPath = path.join(
+      remote.app.getPath("userData"),
+      "printtech.db"
+    );
+
+    const db = new sqlite3.Database(dbPath);
+
+    function add() {
+      const nome = document.getElementById("nome").value;
+      db.run("INSERT INTO clientes (nome) VALUES (?)", [nome], load);
+    }
+
+    function load() {
+      db.all("SELECT * FROM clientes", (err, rows) => {
+        document.getElementById("lista").innerHTML =
+          rows.map(r => `<li>${r.nome}</li>`).join("");
+      });
+    }
+
+    load();
+  </script>
+</body>
 </html>
