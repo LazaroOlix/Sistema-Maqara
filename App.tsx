@@ -49,6 +49,9 @@ import {
 import { Client, InventoryItem, ServiceOrder, OrderStatus, StatusHistoryEntry, UsedPart } from './types';
 import { getPrinterDiagnosis, generateClientMessage } from './services/geminiService';
 
+// Caminho para a logo fornecida pelo usuário
+const LOGO_IMAGE = 'https://files.oaiusercontent.com/file-2EUPq83V8SreYF9pU4jCAt?se=2025-02-12T13%3A40%3A20Z&sp=r&sv=2024-08-04&sr=b&rscc=max-age%3D604800%2C%20immutable%2C%20private&rscd=attachment%3B%20filename%3D739a2d3c-9136-4700-9e65-c7d60920f329.webp&sig=G0v3nU7PIdfK9lVf9l%2BFf6rIomW8v3G6h/h21p9H6oE%3D';
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'inventory' | 'clients'>('dashboard');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -359,11 +362,12 @@ export default function App() {
     <div className="flex h-screen bg-[#F8FAFC] overflow-hidden text-slate-900 font-sans print:bg-white">
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col shadow-sm print:hidden">
-        <div className="p-8 border-b border-slate-100 flex items-center gap-3">
-          <div className="bg-red-600 p-2 rounded-lg shadow-md shadow-red-200">
-            <Printer size={24} className="text-white" />
-          </div>
-          <span className="text-xl font-black tracking-tighter text-slate-900 uppercase">PRINT<span className="text-red-600">TECH</span></span>
+        <div className="p-8 border-b border-slate-100 flex items-center justify-center">
+          <img 
+            src={LOGO_IMAGE} 
+            alt="MaqAra Logo" 
+            className="h-16 w-auto object-contain"
+          />
         </div>
         <nav className="flex-1 p-4 space-y-2 mt-4">
           <NavButton icon={<LayoutDashboard size={20}/>} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
@@ -547,8 +551,12 @@ export default function App() {
             <div className="p-10 space-y-8 border-2 border-slate-900 rounded-lg">
               <div className="flex justify-between items-start border-b-2 border-slate-900 pb-6">
                 <div>
-                  <h1 className="text-3xl font-black uppercase">PRINT<span className="text-red-600">TECH</span></h1>
-                  <p className="text-xs font-bold">ASSISTÊNCIA TÉCNICA EM IMPRESSORAS</p>
+                  <img 
+                    src={LOGO_IMAGE} 
+                    alt="MaqAra Logo" 
+                    className="h-14 w-auto mb-2 object-contain"
+                  />
+                  <p className="text-xs font-bold uppercase tracking-wider">ASSISTÊNCIA TÉCNICA EM IMPRESSORAS</p>
                 </div>
                 <div className="text-right">
                   <h2 className="text-xl font-black">ORDEM DE SERVIÇO #{orderToPrint.id}</h2>
@@ -619,17 +627,19 @@ export default function App() {
         </div>
       </main>
 
-      {/* Drawer Detalhes OS - AGORA COM DRAFT E SALVAMENTO EXPLÍCITO */}
+      {/* Drawer Detalhes OS */}
       {selectedOrder && editingOrder && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-end print:hidden">
           <div className="w-full max-w-2xl bg-white h-full shadow-2xl overflow-y-auto animate-slide-in-right flex flex-col">
             {/* Header Drawer */}
             <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
               <div className="flex items-center gap-4">
-                <div className="bg-red-100 p-3 rounded-2xl"><Wrench size={28} className="text-red-600" /></div>
+                <div className="bg-red-100 p-2 rounded-xl">
+                   <img src={LOGO_IMAGE} alt="MaqAra" className="h-10 w-auto object-contain" />
+                </div>
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900">OS #{editingOrder.id}</h2>
-                  <p className="text-slate-500 font-medium">{editingOrder.printerModel}</p>
+                  <h2 className="text-xl font-black text-slate-900 uppercase">OS #{editingOrder.id}</h2>
+                  <p className="text-slate-500 font-medium text-xs">{editingOrder.printerModel}</p>
                 </div>
               </div>
               <div className="flex gap-2">
@@ -794,7 +804,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Nova OS - COM AUTOCOMPLETE DE CLIENTE */}
+      {/* Modal Nova OS */}
       <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova Ordem de Serviço">
         <form onSubmit={(e) => {
           e.preventDefault();
