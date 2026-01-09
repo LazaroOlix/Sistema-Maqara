@@ -1,3 +1,4 @@
+
 export enum OrderStatus {
   PENDING = 'Pendente',
   DIAGNOSING = 'Em Diagnóstico',
@@ -11,6 +12,14 @@ export enum PartReminderStatus {
   PENDING = 'Pendente',
   ORDERED = 'Pedido',
   RECEIVED = 'Recebido'
+}
+
+export interface Machine {
+  id: string;
+  type: string;
+  model: string;
+  serialNumber: string;
+  defaultProblem?: string;
 }
 
 export interface PartReminder {
@@ -27,6 +36,7 @@ export interface Client {
   name: string;
   phone: string;
   email: string;
+  machines?: Machine[];
 }
 
 export interface InventoryItem {
@@ -55,8 +65,9 @@ export interface StatusHistoryEntry {
 export interface ServiceOrder {
   id: string;
   clientId: string;
-  printerModel: string;
-  serialNumber: string;
+  machineId?: string; // Referência à máquina do cliente
+  printerModel: string; // Mantido para retrocompatibilidade e histórico
+  serialNumber: string; // Mantido para retrocompatibilidade e histórico
   problemDescription: string;
   diagnosis?: string;
   status: OrderStatus;

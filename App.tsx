@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
@@ -29,7 +30,8 @@ import {
   Check,
   Edit2,
   ShoppingCart,
-  FileText
+  FileText,
+  MinusCircle
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -40,7 +42,7 @@ import {
 } from 'recharts';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
-import { Client, InventoryItem, ServiceOrder, OrderStatus, PartReminder, PartReminderStatus } from './types';
+import { Client, InventoryItem, ServiceOrder, OrderStatus, PartReminder, PartReminderStatus, Machine } from './types';
 import { generateClientMessage } from './services/geminiService';
 
 const LOGO_IMAGE = '/logo.png';
@@ -93,6 +95,10 @@ export default function App() {
   const [clientSearch, setClientSearch] = useState('');
   const [showClientResults, setShowClientResults] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedMachineId, setSelectedMachineId] = useState('');
+
+  // Estados para máquinas no modal de cliente
+  const [clientMachinesDraft, setClientMachinesDraft] = useState<Machine[]>([]);
 
   // Memos
   const filteredClients = useMemo(() => {
@@ -245,6 +251,84 @@ export default function App() {
       partsCost,
       totalCost: (editingOrder.laborCost || 0) + partsCost
     });
+  };
+
+  const handlePrintInventory = async () => {
+    const printArea = document.getElementById('print-area');
+    if (!printArea) return;
+
+    const totalInvestment = inventory.reduce((acc, i) => acc + (i.quantity * i.costPrice), 0);
+    const totalItems = inventory.reduce((acc, i) => acc + i.quantity, 0);
+
+    printArea.style.display = 'block';
+    printArea.style.position = 'fixed';
+    printArea.style.left = '-5000px';
+    printArea.style.top = '0';
+    printArea.style.width = '210mm';
+
+    printArea.innerHTML = `
+      <div style="padding: 40px; font-family: 'Inter', sans-serif; color: #0f172a; background: white; width: 210mm; min-height: 297mm; box-sizing: border-box;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #000; padding-bottom: 24px; margin-bottom: 32px;">
+          <div>
+            <h1 style="font-size: 32px; font-weight: 900; color: #dc2626; margin: 0; letter-spacing: -1px;">MAQARA</h1>
+            <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #64748b; margin-top: 4px;">Relatório de Estoque Profissional</p>
+          </div>
+          <div style="text-align: right;">
+            <h2 style="font-size: 18px; font-weight: 900; margin: 0;">DATA DE GERAÇÃO</h2>
+            <p style="font-size: 12px; font-weight: 600;">${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
+          </div>
+        </div>
+
+        <table style="width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 40px;">
+          <thead>
+            <tr style="background: #f1f5f9; text-align: left;">
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Peça</th>
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: center;">Qtd</th>
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: right;">Custo</th>
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: right;">Venda</th>
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: right;">Inv. Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${inventory.map(i => `
+              <tr style="border-bottom: 1px solid #f1f5f9; ${i.quantity <= i.minStock ? 'background: #fff1f2;' : ''}">
+                <td style="padding: 10px;">
+                  <span style="font-weight: 700;">${i.name}</span>
+                  ${i.quantity <= i.minStock ? '<br><span style="color: #dc2626; font-size: 9px; font-weight: 800;">[ESTOQUE BAIXO]</span>' : ''}
+                </td>
+                <td style="padding: 10px; text-align: center;">${i.quantity}</td>
+                <td style="padding: 10px; text-align: right;">R$ ${i.costPrice.toFixed(2)}</td>
+                <td style="padding: 10px; text-align: right;">R$ ${i.sellPrice.toFixed(2)}</td>
+                <td style="padding: 10px; text-align: right; font-weight: 700;">R$ ${(i.quantity * i.costPrice).toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        <div style="display: flex; justify-content: flex-end; margin-top: 40px;">
+          <div style="width: 300px; padding: 20px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 16px;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px;"><span>Total de Itens:</span> <span>${totalItems} un</span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; color: #dc2626; border-top: 1px solid #cbd5e1; pt-2; margin-top: 8px;">
+               <span>Investimento:</span> <span>R$ ${totalInvestment.toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const canvas = await html2canvas(printArea, { scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      pdf.addImage(imgData, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
+      window.open(pdf.output('bloburl'), '_blank');
+    } catch (err) {
+      console.error(err);
+      window.print();
+    } finally {
+      printArea.style.display = 'none';
+    }
   };
 
   // Funções de Impressão e Geração de PDF
@@ -433,6 +517,33 @@ export default function App() {
 
   const COLORS = ['#dc2626', '#ef4444', '#f87171', '#fca5a5', '#fee2e2', '#64748b'];
 
+  const handleAddMachineToDraft = () => {
+    const typeInput = document.getElementById('machine-type') as HTMLInputElement;
+    const modelInput = document.getElementById('machine-model') as HTMLInputElement;
+    const serialInput = document.getElementById('machine-serial') as HTMLInputElement;
+
+    if (!typeInput.value || !modelInput.value) {
+      alert('Tipo e Modelo são obrigatórios.');
+      return;
+    }
+
+    const newMachine: Machine = {
+      id: Date.now().toString(),
+      type: typeInput.value,
+      model: modelInput.value,
+      serialNumber: serialInput.value,
+    };
+
+    setClientMachinesDraft(prev => [...prev, newMachine]);
+    typeInput.value = '';
+    modelInput.value = '';
+    serialInput.value = '';
+  };
+
+  const handleRemoveMachineFromDraft = (id: string) => {
+    setClientMachinesDraft(prev => prev.filter(m => m.id !== id));
+  };
+
   return (
     <div className="flex h-screen bg-[#F8FAFC] overflow-hidden text-slate-900 font-sans print:bg-white">
       {/* Sidebar - Oculto na impressão */}
@@ -459,9 +570,14 @@ export default function App() {
               </h1>
             </div>
             <div className="flex gap-3">
-              {activeTab === 'orders' && <button onClick={() => { setClientSearch(''); setSelectedClientId(''); setIsOrderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Nova OS</button>}
-              {activeTab === 'clients' && <button onClick={() => setIsClientModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Cliente</button>}
-              {activeTab === 'inventory' && <button onClick={() => setIsInventoryModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Item</button>}
+              {activeTab === 'orders' && <button onClick={() => { setClientSearch(''); setSelectedClientId(''); setSelectedMachineId(''); setIsOrderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Nova OS</button>}
+              {activeTab === 'clients' && <button onClick={() => { setClientMachinesDraft([]); setIsClientModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Cliente</button>}
+              {activeTab === 'inventory' && (
+                <div className="flex gap-2">
+                  <button onClick={handlePrintInventory} className="bg-white text-slate-700 border border-slate-200 px-4 py-3 rounded-xl font-bold hover:bg-slate-50 shadow-sm flex items-center gap-2"><Printer size={20}/> Relatório</button>
+                  <button onClick={() => setIsInventoryModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Item</button>
+                </div>
+              )}
               {activeTab === 'reminders' && <button onClick={() => { setEditingReminder(null); setIsReminderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Lembrete</button>}
             </div>
           </div>
@@ -600,15 +716,16 @@ export default function App() {
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
               <table className="w-full text-left">
                 <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
-                  <tr><th className="p-6">Nome do Cliente</th><th className="p-6">WhatsApp</th><th className="p-6 text-right">Ações</th></tr>
+                  <tr><th className="p-6">Nome do Cliente</th><th className="p-6">WhatsApp</th><th className="p-6">Máquinas</th><th className="p-6 text-right">Ações</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {clients?.length === 0 ? (
-                    <tr><td colSpan={3} className="p-20 text-center text-slate-400 italic">Nenhum cliente cadastrado.</td></tr>
+                    <tr><td colSpan={4} className="p-20 text-center text-slate-400 italic">Nenhum cliente cadastrado.</td></tr>
                   ) : clients?.map(c => (
                     <tr key={c.id} className="hover:bg-slate-50 transition-colors group">
                       <td className="p-6 font-black">{c.name}</td>
                       <td className="p-6 font-bold text-slate-600">{c.phone}</td>
+                      <td className="p-6 font-bold text-xs">{(c.machines || []).length} cadastradas</td>
                       <td className="p-6 text-right flex justify-end gap-3">
                         <button onClick={() => handlePrintClientHistory(c)} className="p-2 text-slate-400 hover:text-blue-600 flex items-center gap-1 text-[10px] font-black uppercase"><History size={16}/> Histórico</button>
                         <button onClick={() => handleDeleteClient(c.id)} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button>
@@ -675,6 +792,16 @@ export default function App() {
                   ))}
                 </div>
               </div>
+
+              {/* Info da Máquina na OS */}
+              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-2">
+                 <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Informações do Equipamento</p>
+                 <div className="grid grid-cols-2 gap-4">
+                    <div><p className="text-xs text-slate-500 font-bold">Modelo</p><p className="font-bold text-sm">{editingOrder.printerModel}</p></div>
+                    <div><p className="text-xs text-slate-500 font-bold">N/S</p><p className="font-bold text-sm">{editingOrder.serialNumber || 'N/A'}</p></div>
+                 </div>
+              </div>
+
               <div className="border border-red-100 rounded-[32px] overflow-hidden bg-white shadow-sm">
                 <div className="p-5 bg-red-50/50 border-b border-red-100 font-black text-[10px] uppercase tracking-widest text-red-600 flex items-center gap-2"><BrainCircuit size={16}/> Diagnóstico Técnico</div>
                 <div className="p-8 space-y-6">
@@ -701,20 +828,102 @@ export default function App() {
 
       {/* Modais */}
       <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova OS">
-        <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); if (!selectedClientId) return; const newOrder: ServiceOrder = { id: `OS-${Math.floor(1000 + Math.random() * 9000)}`, clientId: selectedClientId, printerModel: formData.get('printerModel') as string, serialNumber: formData.get('serialNumber') as string, problemDescription: formData.get('problemDescription') as string, status: OrderStatus.PENDING, history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Recepção' }], priority: 'Normal', laborCost: 0, partsCost: 0, totalCost: 0, partsUsed: [], createdAt: new Date(), updatedAt: new Date() }; updateState('orders', [newOrder, ...orders]); setIsOrderModalOpen(false); setClientSearch(''); setSelectedClientId(''); }} className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1 relative"><label className="text-[10px] font-black uppercase">Buscar Cliente</label><input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) setSelectedClientId(''); }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome..." />{showClientResults && filteredClients.length > 0 && (<div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border rounded-2xl shadow-2xl max-h-48 overflow-y-auto">{filteredClients.map(c => (<div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b">{c.name}</div>))}</div>)}</div>
-            <div className="space-y-1"><label className="text-[10px] font-black uppercase">Modelo</label><input name="printerModel" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" required /></div>
+        <form onSubmit={(e) => { 
+          e.preventDefault(); 
+          const formData = new FormData(e.currentTarget); 
+          if (!selectedClientId) { alert('Selecione um cliente.'); return; }
+          const client = clients.find(c => c.id === selectedClientId);
+          const machine = client?.machines?.find(m => m.id === selectedMachineId);
+          
+          if (!selectedMachineId) { alert('Selecione uma máquina do cliente.'); return; }
+
+          const newOrder: ServiceOrder = { 
+            id: `OS-${Math.floor(1000 + Math.random() * 9000)}`, 
+            clientId: selectedClientId, 
+            machineId: selectedMachineId,
+            printerModel: machine?.model || 'Modelo não especificado', 
+            serialNumber: machine?.serialNumber || 'N/S não especificado', 
+            problemDescription: formData.get('problemDescription') as string, 
+            status: OrderStatus.PENDING, 
+            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Recepção' }], 
+            priority: formData.get('priority') as any || 'Normal', 
+            laborCost: 0, 
+            partsCost: 0, 
+            totalCost: 0, 
+            partsUsed: [], 
+            createdAt: new Date(), 
+            updatedAt: new Date() 
+          }; 
+          updateState('orders', [newOrder, ...orders]); 
+          setIsOrderModalOpen(false); 
+          setClientSearch(''); 
+          setSelectedClientId(''); 
+          setSelectedMachineId('');
+        }} className="space-y-6">
+          <div className="grid grid-cols-1 gap-4">
+            <div className="space-y-1 relative"><label className="text-[10px] font-black uppercase">1. Buscar Cliente</label><input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) { setSelectedClientId(''); setSelectedMachineId(''); } }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome..." />{showClientResults && filteredClients.length > 0 && (<div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border rounded-2xl shadow-2xl max-h-48 overflow-y-auto">{filteredClients.map(c => (<div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b">{c.name}</div>))}</div>)}</div>
+            
+            {selectedClientId && (
+               <div className="space-y-1">
+                 <label className="text-[10px] font-black uppercase">2. Selecionar Máquina</label>
+                 <select value={selectedMachineId} onChange={(e) => setSelectedMachineId(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
+                    <option value="">Selecione...</option>
+                    {(clients.find(c => c.id === selectedClientId)?.machines || []).map(m => (
+                      <option key={m.id} value={m.id}>{m.type} - {m.model} (SN: {m.serialNumber || 'N/A'})</option>
+                    ))}
+                 </select>
+                 {(clients.find(c => c.id === selectedClientId)?.machines || []).length === 0 && <p className="text-[10px] text-red-600 font-bold">Este cliente não possui máquinas cadastradas. Vá em 'Clientes' para adicionar.</p>}
+               </div>
+            )}
           </div>
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Criar OS</button>
+          <div className="space-y-1"><label className="text-[10px] font-black uppercase">Prioridade</label><select name="priority" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold"><option value="Normal">Normal</option><option value="Baixa">Baixa</option><option value="Alta">Alta</option></select></div>
+          <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Reclamação / Defeito..." required />
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Abrir OS</button>
         </form>
       </SaaSModal>
 
-      <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Novo Cliente">
-        <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); updateState('clients', [...clients, { id: Date.now().toString(), name: formData.get('name') as string, phone: formData.get('phone') as string, email: formData.get('email') as string }]); setIsClientModalOpen(false); }} className="space-y-6">
-          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo" required />
-          <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp" required />
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Cadastrar</button>
+      <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Gerenciar Cliente e Máquinas">
+        <form onSubmit={(e) => { 
+          e.preventDefault(); 
+          const formData = new FormData(e.currentTarget); 
+          const newClient: Client = { 
+            id: Date.now().toString(), 
+            name: formData.get('name') as string, 
+            phone: formData.get('phone') as string, 
+            email: formData.get('email') as string,
+            machines: clientMachinesDraft
+          };
+          updateState('clients', [...clients, newClient]); 
+          setIsClientModalOpen(false); 
+          setClientMachinesDraft([]);
+        }} className="space-y-6">
+          <div className="space-y-4">
+            <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo" required />
+            <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp" required />
+          </div>
+
+          <div className="border-t pt-6 space-y-4">
+            <p className="text-[10px] font-black uppercase text-slate-400">Máquinas do Cliente</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <input id="machine-type" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Tipo (Ex: Impressora)" />
+              <input id="machine-model" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Modelo (Ex: L3250)" />
+              <div className="flex gap-2">
+                <input id="machine-serial" type="text" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Serial" />
+                <button type="button" onClick={handleAddMachineToDraft} className="bg-slate-900 text-white p-3 rounded-xl"><Plus size={18}/></button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {clientMachinesDraft.map(m => (
+                <div key={m.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border">
+                  <div><p className="font-bold text-sm">{m.type} - {m.model}</p><p className="text-[10px] text-slate-400">SN: {m.serialNumber || 'N/A'}</p></div>
+                  <button type="button" onClick={() => handleRemoveMachineFromDraft(m.id)} className="text-red-600"><MinusCircle size={18}/></button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Salvar Cliente</button>
         </form>
       </SaaSModal>
 
@@ -722,8 +931,11 @@ export default function App() {
         <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); updateState('inventory', [...inventory, { id: Date.now().toString(), name: formData.get('name') as string, quantity: parseInt(formData.get('quantity') as string), minStock: parseInt(formData.get('minStock') as string), costPrice: parseFloat(formData.get('costPrice') as string), sellPrice: parseFloat(formData.get('sellPrice') as string) }]); setIsInventoryModalOpen(false); }} className="space-y-6">
           <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
           <div className="grid grid-cols-2 gap-4"><input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd" required /><input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Mínimo" /></div>
-          <input name="sellPrice" type="number" step="0.01" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Venda" required />
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Salvar</button>
+          <div className="grid grid-cols-2 gap-4">
+             <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Custo" required />
+             <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Venda" required />
+          </div>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Salvar no Estoque</button>
         </form>
       </SaaSModal>
 
