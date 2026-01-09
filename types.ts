@@ -7,6 +7,21 @@ export enum OrderStatus {
   DELIVERED = 'Entregue'
 }
 
+export enum PartReminderStatus {
+  PENDING = 'Pendente',
+  ORDERED = 'Pedido',
+  RECEIVED = 'Recebido'
+}
+
+export interface PartReminder {
+  id: string;
+  partName: string;
+  quantity: number;
+  notes?: string;
+  status: PartReminderStatus;
+  createdAt: Date;
+}
+
 export interface Client {
   id: string;
   name: string;
