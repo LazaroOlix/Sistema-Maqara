@@ -1,8 +1,11 @@
+
 import { GoogleGenAI } from "@google/genai";
 
 // Inicialização segura conforme diretrizes
 const getAIClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  // O Vite substituirá process.env.API_KEY com base na config do vite.config.ts
+  const apiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
+  return new GoogleGenAI({ apiKey: apiKey || '' });
 };
 
 export const getPrinterDiagnosis = async (printerModel: string, problem: string): Promise<string> => {
