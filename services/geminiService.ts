@@ -6,8 +6,8 @@ let aiInstance: GoogleGenAI | null = null;
 
 const getAI = () => {
   if (!aiInstance) {
-    const apiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
-    aiInstance = new GoogleGenAI({ apiKey: apiKey || '' });
+    // Correct initialization using named parameter and process.env.API_KEY directly as per guidelines
+    aiInstance = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
   }
   return aiInstance;
 };
@@ -15,7 +15,10 @@ const getAI = () => {
 export const getPrinterDiagnosis = async (printerModel: string, problem: string): Promise<string> => {
   try {
     const ai = getAI();
-    const prompt = `
+    // Using gemini-3-flash-preview as recommended for basic text tasks
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `
       Você é um técnico especialista sênior em manutenção de impressoras.
       Analise o seguinte caso:
       Modelo da Impressora: ${printerModel}
@@ -26,13 +29,10 @@ export const getPrinterDiagnosis = async (printerModel: string, problem: string)
       2. Peças que geralmente precisam ser trocadas.
       3. Passos sugeridos para verificação.
       Mantenha a resposta concisa em Markdown.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
+    `,
     });
 
+    // Accessing the .text property directly (not a method) as per guidelines
     return response.text || "Não foi possível gerar o diagnóstico.";
   } catch (error) {
     console.error("Erro Gemini:", error);
@@ -48,7 +48,10 @@ export const generateClientMessage = async (
 ): Promise<string> => {
   try {
     const ai = getAI();
-    const prompt = `
+    // Using gemini-3-flash-preview as recommended for basic text tasks
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `
       Escreva uma mensagem de WhatsApp curta e profissional para um cliente de assistência técnica.
       Cliente: ${clientName}
       Equipamento: ${printerModel}
@@ -56,13 +59,10 @@ export const generateClientMessage = async (
       Detalhes Adicionais: ${details}
       Se o status for 'Pronto', diga que já pode retirar. Se for 'Entregue', agradeça a preferência.
       Não use hashtags.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
+    `,
     });
 
+    // Accessing the .text property directly (not a method) as per guidelines
     return response.text || "Mensagem não gerada.";
   } catch (error) {
     console.error("Erro Gemini:", error);

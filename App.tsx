@@ -47,6 +47,9 @@ import { generateClientMessage } from './services/geminiService';
 
 const LOGO_IMAGE = '/logo.png';
 
+// Fix: Defined the missing COLORS constant for PieChart colors
+const COLORS = ['#dc2626', '#0f172a', '#f59e0b', '#10b981', '#3b82f6', '#6366f1'];
+
 // Função auxiliar para inicialização segura
 const getStoredData = (key: string, defaultValue: any) => {
   try {
@@ -331,18 +334,16 @@ export default function App() {
     }
   };
 
-  // Funções de Impressão e Geração de PDF
   const handlePrintOS = async (os: ServiceOrder) => {
     const client = clients.find(c => c.id === os.clientId);
     const printArea = document.getElementById('print-area');
     if (!printArea) return;
 
-    // Configura o print-area para ser capturado pelo html2canvas (invisível ao usuário)
     printArea.style.display = 'block';
     printArea.style.position = 'fixed';
     printArea.style.left = '-5000px';
     printArea.style.top = '0';
-    printArea.style.width = '210mm'; // Largura A4
+    printArea.style.width = '210mm';
 
     printArea.innerHTML = `
       <div style="padding: 40px; font-family: 'Inter', sans-serif; color: #0f172a; background: white; width: 210mm; min-height: 297mm; box-sizing: border-box;">
@@ -435,34 +436,14 @@ export default function App() {
     `;
 
     try {
-      // Pequeno delay para garantir que os estilos internos sejam processados
       await new Promise(resolve => setTimeout(resolve, 500));
-      
-      const canvas = await html2canvas(printArea, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff'
-      });
-      
+      const canvas = await html2canvas(printArea, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
       const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4'
-      });
-      
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      
-      const pdfUrl = pdf.output('bloburl');
-      window.open(pdfUrl, '_blank');
-      
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      pdf.addImage(imgData, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
+      window.open(pdf.output('bloburl'), '_blank');
     } catch (error) {
       console.error('Falha ao gerar PDF:', error);
-      // Fallback para impressão do sistema
       window.print();
     } finally {
       printArea.style.display = 'none';
@@ -515,8 +496,6 @@ export default function App() {
     window.print();
   };
 
-  const COLORS = ['#dc2626', '#ef4444', '#f87171', '#fca5a5', '#fee2e2', '#64748b'];
-
   const handleAddMachineToDraft = () => {
     const typeInput = document.getElementById('machine-type') as HTMLInputElement;
     const modelInput = document.getElementById('machine-model') as HTMLInputElement;
@@ -527,13 +506,7 @@ export default function App() {
       return;
     }
 
-    const newMachine: Machine = {
-      id: Date.now().toString(),
-      type: typeInput.value,
-      model: modelInput.value,
-      serialNumber: serialInput.value,
-    };
-
+    const newMachine: Machine = { id: Date.now().toString(), type: typeInput.value, model: modelInput.value, serialNumber: serialInput.value };
     setClientMachinesDraft(prev => [...prev, newMachine]);
     typeInput.value = '';
     modelInput.value = '';
@@ -546,7 +519,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#F8FAFC] overflow-hidden text-slate-900 font-sans print:bg-white">
-      {/* Sidebar - Oculto na impressão */}
+      {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col shadow-sm print:hidden">
         <div className="p-8 border-b border-slate-100 flex items-center justify-center">
           <img src={LOGO_IMAGE} alt="Logo" className="h-16 w-auto object-contain" onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/150x60?text=MAQARA'; }} />
@@ -793,7 +766,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Info da Máquina na OS */}
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-2">
                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Informações do Equipamento</p>
                  <div className="grid grid-cols-2 gap-4">
@@ -826,19 +798,24 @@ export default function App() {
         </div>
       )}
 
-      {/* Modais */}
-      <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova OS">
+      {/* Modal Nova OS */}
+      <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova Ordem de Serviço">
         <form onSubmit={(e) => { 
           e.preventDefault(); 
           const formData = new FormData(e.currentTarget); 
+          const osId = formData.get('osId') as string;
+          
+          if (!osId) { alert('Informe o número da OS.'); return; }
+          if (orders.some(o => o.id === osId)) { alert('Este número de OS já existe. Escolha outro.'); return; }
           if (!selectedClientId) { alert('Selecione um cliente.'); return; }
+          
           const client = clients.find(c => c.id === selectedClientId);
           const machine = client?.machines?.find(m => m.id === selectedMachineId);
           
           if (!selectedMachineId) { alert('Selecione uma máquina do cliente.'); return; }
 
           const newOrder: ServiceOrder = { 
-            id: `OS-${Math.floor(1000 + Math.random() * 9000)}`, 
+            id: osId, 
             clientId: selectedClientId, 
             machineId: selectedMachineId,
             printerModel: machine?.model || 'Modelo não especificado', 
@@ -861,13 +838,18 @@ export default function App() {
           setSelectedMachineId('');
         }} className="space-y-6">
           <div className="grid grid-cols-1 gap-4">
-            <div className="space-y-1 relative"><label className="text-[10px] font-black uppercase">1. Buscar Cliente</label><input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) { setSelectedClientId(''); setSelectedMachineId(''); } }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome..." />{showClientResults && filteredClients.length > 0 && (<div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border rounded-2xl shadow-2xl max-h-48 overflow-y-auto">{filteredClients.map(c => (<div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b">{c.name}</div>))}</div>)}</div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase">Número da OS</label>
+              <input name="osId" type="text" pattern="[0-9]*" inputMode="numeric" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-red-600 text-lg" placeholder="Digite o número da OS..." required />
+            </div>
+
+            <div className="space-y-1 relative"><label className="text-[10px] font-black uppercase">1. Buscar Cliente</label><input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) { setSelectedClientId(''); setSelectedMachineId(''); } }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome do cliente..." />{showClientResults && filteredClients.length > 0 && (<div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border rounded-2xl shadow-2xl max-h-48 overflow-y-auto">{filteredClients.map(c => (<div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b">{c.name}</div>))}</div>)}</div>
             
             {selectedClientId && (
                <div className="space-y-1">
                  <label className="text-[10px] font-black uppercase">2. Selecionar Máquina</label>
                  <select value={selectedMachineId} onChange={(e) => setSelectedMachineId(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
-                    <option value="">Selecione...</option>
+                    <option value="">Selecione o equipamento...</option>
                     {(clients.find(c => c.id === selectedClientId)?.machines || []).map(m => (
                       <option key={m.id} value={m.id}>{m.type} - {m.model} (SN: {m.serialNumber || 'N/A'})</option>
                     ))}
@@ -877,11 +859,12 @@ export default function App() {
             )}
           </div>
           <div className="space-y-1"><label className="text-[10px] font-black uppercase">Prioridade</label><select name="priority" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold"><option value="Normal">Normal</option><option value="Baixa">Baixa</option><option value="Alta">Alta</option></select></div>
-          <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Reclamação / Defeito..." required />
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Abrir OS</button>
+          <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Descreva o problema relatado..." required />
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Salvar e Iniciar OS</button>
         </form>
       </SaaSModal>
 
+      {/* Outros modais mantidos */}
       <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Gerenciar Cliente e Máquinas">
         <form onSubmit={(e) => { 
           e.preventDefault(); 
@@ -901,9 +884,8 @@ export default function App() {
             <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo" required />
             <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp" required />
           </div>
-
           <div className="border-t pt-6 space-y-4">
-            <p className="text-[10px] font-black uppercase text-slate-400">Máquinas do Cliente</p>
+            <p className="text-[10px] font-black uppercase text-slate-400">Equipamentos do Cliente</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               <input id="machine-type" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Tipo (Ex: Impressora)" />
               <input id="machine-model" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Modelo (Ex: L3250)" />
@@ -912,7 +894,6 @@ export default function App() {
                 <button type="button" onClick={handleAddMachineToDraft} className="bg-slate-900 text-white p-3 rounded-xl"><Plus size={18}/></button>
               </div>
             </div>
-
             <div className="space-y-2">
               {clientMachinesDraft.map(m => (
                 <div key={m.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border">
@@ -922,27 +903,26 @@ export default function App() {
               ))}
             </div>
           </div>
-
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Salvar Cliente</button>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Cadastrar Cliente</button>
         </form>
       </SaaSModal>
 
-      <SaaSModal isOpen={isInventoryModalOpen} onClose={() => setIsInventoryModalOpen(false)} title="Novo Item">
+      <SaaSModal isOpen={isInventoryModalOpen} onClose={() => setIsInventoryModalOpen(false)} title="Novo Item de Estoque">
         <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); updateState('inventory', [...inventory, { id: Date.now().toString(), name: formData.get('name') as string, quantity: parseInt(formData.get('quantity') as string), minStock: parseInt(formData.get('minStock') as string), costPrice: parseFloat(formData.get('costPrice') as string), sellPrice: parseFloat(formData.get('sellPrice') as string) }]); setIsInventoryModalOpen(false); }} className="space-y-6">
           <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
-          <div className="grid grid-cols-2 gap-4"><input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd" required /><input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Mínimo" /></div>
+          <div className="grid grid-cols-2 gap-4"><input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Quantidade Atual" required /><input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Estoque Mínimo" /></div>
           <div className="grid grid-cols-2 gap-4">
-             <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Custo" required />
-             <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Venda" required />
+             <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço de Custo" required />
+             <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço de Venda" required />
           </div>
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Salvar no Estoque</button>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Adicionar ao Estoque</button>
         </form>
       </SaaSModal>
 
-      <SaaSModal isOpen={isReminderModalOpen} onClose={() => setIsReminderModalOpen(false)} title={editingReminder ? "Editar Lembrete" : "Novo Lembrete"}>
+      <SaaSModal isOpen={isReminderModalOpen} onClose={() => setIsReminderModalOpen(false)} title={editingReminder ? "Editar Lembrete" : "Novo Lembrete de Peça"}>
         <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); const reminderData = { partName: formData.get('partName') as string, quantity: parseInt(formData.get('quantity') as string), notes: formData.get('notes') as string, status: editingReminder ? editingReminder.status : PartReminderStatus.PENDING }; if (editingReminder) { updateState('reminders', reminders.map(r => r.id === editingReminder.id ? { ...r, ...reminderData } : r)); } else { updateState('reminders', [{ id: Date.now().toString(), ...reminderData, createdAt: new Date() }, ...reminders]); } setIsReminderModalOpen(false); }} className="space-y-6">
-          <input name="partName" defaultValue={editingReminder?.partName} type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
-          <input name="quantity" defaultValue={editingReminder?.quantity} type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Quantidade" required />
+          <input name="partName" defaultValue={editingReminder?.partName} type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça para pedido" required />
+          <input name="quantity" defaultValue={editingReminder?.quantity} type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Quantidade necessária" required />
           <textarea name="notes" defaultValue={editingReminder?.notes} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Observações (opcional)" rows={3}></textarea>
           <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">{editingReminder ? 'Atualizar' : 'Criar Lembrete'}</button>
         </form>
@@ -951,7 +931,7 @@ export default function App() {
   );
 }
 
-// Subcomponentes Refatorados
+// Subcomponentes
 function NavButton({icon, label, active, onClick, badge}: any) {
   return (
     <button onClick={onClick} className={`w-full flex items-center justify-between gap-3 px-4 py-3.5 rounded-2xl transition-all ${active ? 'bg-red-600 text-white font-black shadow-lg scale-[1.02]' : 'text-slate-500 hover:bg-red-50 hover:text-red-600 font-bold'}`}>
