@@ -31,7 +31,9 @@ import {
   Edit2,
   ShoppingCart,
   FileText,
-  MinusCircle
+  MinusCircle,
+  ListOrdered,
+  Timer
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -42,15 +44,12 @@ import {
 } from 'recharts';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
-import { Client, InventoryItem, ServiceOrder, OrderStatus, PartReminder, PartReminderStatus, Machine } from './types';
+import { Client, InventoryItem, ServiceOrder, OrderStatus, PartReminder, PartReminderStatus, Machine, QuoteStatus } from './types';
 import { generateClientMessage } from './services/geminiService';
 
 const LOGO_IMAGE = '/logo.png';
-
-// Fix: Defined the missing COLORS constant for PieChart colors
 const COLORS = ['#dc2626', '#0f172a', '#f59e0b', '#10b981', '#3b82f6', '#6366f1'];
 
-// Função auxiliar para inicialização segura
 const getStoredData = (key: string, defaultValue: any) => {
   try {
     const saved = localStorage.getItem(key);
@@ -61,10 +60,9 @@ const getStoredData = (key: string, defaultValue: any) => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'inventory' | 'clients' | 'reminders' | 'reports'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'inventory' | 'clients' | 'reminders' | 'reports' | 'queue'>('dashboard');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // Refatoração para um único hook de estado para dados do sistema
   const [appData, setAppData] = useState({
     orders: getStoredData('maqara_orders', []),
     inventory: getStoredData('maqara_inventory', []),
@@ -72,10 +70,8 @@ export default function App() {
     reminders: getStoredData('maqara_part_reminders', [])
   });
 
-  // Destruturação para facilidade de uso
   const { orders, inventory, clients, reminders } = appData;
 
-  // Persistência centralizada em um único useEffect
   useEffect(() => {
     localStorage.setItem('maqara_orders', JSON.stringify(orders));
     localStorage.setItem('maqara_inventory', JSON.stringify(inventory));
@@ -83,7 +79,6 @@ export default function App() {
     localStorage.setItem('maqara_part_reminders', JSON.stringify(reminders));
   }, [appData]);
 
-  // Estados de UI
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [isInventoryModalOpen, setIsInventoryModalOpen] = useState(false);
@@ -99,15 +94,19 @@ export default function App() {
   const [showClientResults, setShowClientResults] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedMachineId, setSelectedMachineId] = useState('');
-
-  // Estados para máquinas no modal de cliente
   const [clientMachinesDraft, setClientMachinesDraft] = useState<Machine[]>([]);
 
-  // Memos
   const filteredClients = useMemo(() => {
     if (!clientSearch) return [];
     return clients.filter(c => c.name?.toLowerCase().includes(clientSearch.toLowerCase()));
   }, [clientSearch, clients]);
+
+  // Fila de Orçamento: OSs Pendentes ordenadas por data de criação (antiga -> nova)
+  const quoteQueue = useMemo(() => {
+    return orders
+      .filter(o => o.quoteStatus !== 'Orçamento concluído')
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [orders]);
 
   const sortedReminders = useMemo(() => {
     const statusOrder = { [PartReminderStatus.PENDING]: 0, [PartReminderStatus.ORDERED]: 1, [PartReminderStatus.RECEIVED]: 2 };
@@ -145,13 +144,11 @@ export default function App() {
     return Object.keys(counts).map(key => ({ name: key, value: counts[key] }));
   }, [orders]);
 
-  // Efeito para sincronizar draft de edição
   useEffect(() => {
     if (selectedOrder) setEditingOrder(JSON.parse(JSON.stringify(selectedOrder)));
     else setEditingOrder(null);
   }, [selectedOrder]);
 
-  // Handlers de dados usando o novo estado consolidado
   const updateState = (key: string, value: any) => setAppData(prev => ({ ...prev, [key]: value }));
 
   const handleDeleteClient = (id: string) => { if (window.confirm('Excluir este cliente?')) updateState('clients', clients.filter(c => c.id !== id)); };
@@ -159,6 +156,22 @@ export default function App() {
   const handleDeleteInventoryItem = (id: string) => { if (window.confirm('Remover do estoque?')) updateState('inventory', inventory.filter(i => i.id !== id)); };
   const handleDeleteReminder = (id: string) => { if (window.confirm('Excluir este lembrete?')) updateState('reminders', reminders.filter(r => r.id !== id)); };
   const handleUpdateReminderStatus = (id: string, status: PartReminderStatus) => { updateState('reminders', reminders.map(r => r.id === id ? { ...r, status } : r)); };
+
+  const handleUpdateQuoteStatus = (orderId: string, newQuoteStatus: QuoteStatus) => {
+    const updatedOrders = orders.map(o => {
+      if (o.id === orderId) {
+        let newStatus = o.status;
+        if (newQuoteStatus === 'Em orçamento') newStatus = OrderStatus.DIAGNOSING;
+        if (newQuoteStatus === 'Orçamento concluído') newStatus = OrderStatus.WAITING_APPROVAL;
+        return { ...o, quoteStatus: newQuoteStatus, status: newStatus, updatedAt: new Date() };
+      }
+      return o;
+    });
+    updateState('orders', updatedOrders);
+    if (selectedOrder?.id === orderId) {
+      setSelectedOrder(prev => prev ? { ...prev, quoteStatus: newQuoteStatus } : null);
+    }
+  };
 
   const handleExportBackup = () => {
     const dataStr = JSON.stringify(appData, null, 2);
@@ -215,7 +228,7 @@ export default function App() {
     const newOrders = orders.map(o => o.id === id ? { ...o, status: newStatus, updatedAt: new Date(), history: [{ status: newStatus, date: new Date(), user: 'Técnico' }, ...(o.history || [])] } : o);
     updateState('orders', newOrders);
     if (selectedOrder?.id === id) {
-      setSelectedOrder({ ...selectedOrder, status: newStatus, updatedAt: new Date(), history: [{ status: newStatus, date: new Date(), user: 'Técnico' }, ...(selectedOrder.history || [])] });
+      setSelectedOrder(prev => prev ? { ...prev, status: newStatus, updatedAt: new Date() } : null);
     }
   };
 
@@ -259,16 +272,13 @@ export default function App() {
   const handlePrintInventory = async () => {
     const printArea = document.getElementById('print-area');
     if (!printArea) return;
-
     const totalInvestment = inventory.reduce((acc, i) => acc + (i.quantity * i.costPrice), 0);
     const totalItems = inventory.reduce((acc, i) => acc + i.quantity, 0);
-
     printArea.style.display = 'block';
     printArea.style.position = 'fixed';
     printArea.style.left = '-5000px';
     printArea.style.top = '0';
     printArea.style.width = '210mm';
-
     printArea.innerHTML = `
       <div style="padding: 40px; font-family: 'Inter', sans-serif; color: #0f172a; background: white; width: 210mm; min-height: 297mm; box-sizing: border-box;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #000; padding-bottom: 24px; margin-bottom: 32px;">
@@ -281,7 +291,6 @@ export default function App() {
             <p style="font-size: 12px; font-weight: 600;">${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
           </div>
         </div>
-
         <table style="width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 40px;">
           <thead>
             <tr style="background: #f1f5f9; text-align: left;">
@@ -307,7 +316,6 @@ export default function App() {
             `).join('')}
           </tbody>
         </table>
-
         <div style="display: flex; justify-content: flex-end; margin-top: 40px;">
           <div style="width: 300px; padding: 20px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 16px;">
             <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px;"><span>Total de Itens:</span> <span>${totalItems} un</span></div>
@@ -318,7 +326,6 @@ export default function App() {
         </div>
       </div>
     `;
-
     try {
       await new Promise(resolve => setTimeout(resolve, 500));
       const canvas = await html2canvas(printArea, { scale: 2 });
@@ -326,24 +333,17 @@ export default function App() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       pdf.addImage(imgData, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
       window.open(pdf.output('bloburl'), '_blank');
-    } catch (err) {
-      console.error(err);
-      window.print();
-    } finally {
-      printArea.style.display = 'none';
-    }
+    } catch (err) { console.error(err); window.print(); } finally { printArea.style.display = 'none'; }
   };
 
   const handlePrintReminders = async () => {
     const printArea = document.getElementById('print-area');
     if (!printArea) return;
-
     printArea.style.display = 'block';
     printArea.style.position = 'fixed';
     printArea.style.left = '-5000px';
     printArea.style.top = '0';
     printArea.style.width = '210mm';
-
     printArea.innerHTML = `
       <div style="padding: 40px; font-family: 'Inter', sans-serif; color: #0f172a; background: white; width: 210mm; min-height: 297mm; box-sizing: border-box;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #000; padding-bottom: 24px; margin-bottom: 32px;">
@@ -356,7 +356,6 @@ export default function App() {
             <p style="font-size: 12px; font-weight: 600;">${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
           </div>
         </div>
-
         <table style="width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 40px;">
           <thead>
             <tr style="background: #f1f5f9; text-align: left;">
@@ -381,16 +380,10 @@ export default function App() {
                 </td>
               </tr>
             `).join('')}
-            ${reminders.length === 0 ? '<tr><td colspan="4" style="padding: 20px; text-align: center; color: #94a3b8;">Nenhum lembrete encontrado.</td></tr>' : ''}
           </tbody>
         </table>
-
-        <div style="margin-top: 60px; text-align: center; font-size: 9px; color: #94a3b8;">
-           MaqAra Manager - Sistema Profissional de Gestão de Assistência Técnica
-        </div>
       </div>
     `;
-
     try {
       await new Promise(resolve => setTimeout(resolve, 500));
       const canvas = await html2canvas(printArea, { scale: 2 });
@@ -398,26 +391,18 @@ export default function App() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       pdf.addImage(imgData, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
       window.open(pdf.output('bloburl'), '_blank');
-    } catch (err) {
-      console.error(err);
-      window.print();
-    } finally {
-      printArea.style.display = 'none';
-      printArea.innerHTML = '';
-    }
+    } catch (err) { console.error(err); window.print(); } finally { printArea.style.display = 'none'; }
   };
 
   const handlePrintOS = async (os: ServiceOrder) => {
     const client = clients.find(c => c.id === os.clientId);
     const printArea = document.getElementById('print-area');
     if (!printArea) return;
-
     printArea.style.display = 'block';
     printArea.style.position = 'fixed';
     printArea.style.left = '-5000px';
     printArea.style.top = '0';
     printArea.style.width = '210mm';
-
     printArea.innerHTML = `
       <div style="padding: 40px; font-family: 'Inter', sans-serif; color: #0f172a; background: white; width: 210mm; min-height: 297mm; box-sizing: border-box;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #000; padding-bottom: 24px; margin-bottom: 32px;">
@@ -431,83 +416,36 @@ export default function App() {
             <p style="font-size: 12px; font-weight: 600;">Data: ${new Date(os.createdAt).toLocaleDateString()}</p>
           </div>
         </div>
-
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-bottom: 32px;">
           <div>
             <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Dados do Cliente</h3>
             <p style="font-size: 14px; font-weight: 700; margin: 0;">${client?.name || 'Cliente N/A'}</p>
             <p style="font-size: 12px; margin: 4px 0;">Tel: ${client?.phone || 'N/A'}</p>
-            <p style="font-size: 12px; margin: 0;">Email: ${client?.email || 'N/A'}</p>
           </div>
           <div>
             <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Equipamento</h3>
             <p style="font-size: 14px; font-weight: 700; margin: 0;">${os.printerModel}</p>
             <p style="font-size: 12px; margin: 4px 0;">Série: ${os.serialNumber || 'N/A'}</p>
-            <p style="font-size: 12px; margin: 0;">Prioridade: ${os.priority}</p>
           </div>
         </div>
-
         <div style="margin-bottom: 32px;">
           <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Relato do Problema</h3>
           <p style="font-size: 13px; font-style: italic; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin: 0;">"${os.problemDescription}"</p>
         </div>
-
         <div style="margin-bottom: 32px;">
           <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Diagnóstico Técnico</h3>
           <p style="font-size: 13px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin: 0; min-height: 80px;">${os.diagnosis || 'Em análise técnica.'}</p>
         </div>
-
-        <div style="margin-bottom: 32px;">
-          <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Peças Utilizadas</h3>
-          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-            <thead>
-              <tr style="background: #f1f5f9; text-align: left;">
-                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Item</th>
-                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: center;">Qtd</th>
-                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: right;">V. Unit.</th>
-                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: right;">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(os.partsUsed || []).map(p => `
-                <tr style="border-bottom: 1px solid #f1f5f9;">
-                  <td style="padding: 10px;">${p.name}</td>
-                  <td style="padding: 10px; text-align: center;">${p.quantity}</td>
-                  <td style="padding: 10px; text-align: right;">R$ ${p.unitPrice.toFixed(2)}</td>
-                  <td style="padding: 10px; text-align: right; font-weight: 700;">R$ ${(p.quantity * p.unitPrice).toFixed(2)}</td>
-                </tr>
-              `).join('')}
-              ${(os.partsUsed || []).length === 0 ? '<tr><td colspan="4" style="padding: 20px; text-align: center; color: #94a3b8;">Nenhuma peça utilizada.</td></tr>' : ''}
-            </tbody>
-          </table>
-        </div>
-
         <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 40px; margin-bottom: 80px;">
           <div style="font-size: 12px; font-weight: 700; padding: 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
              Status: <span style="color: #dc2626; text-transform: uppercase;">${os.status}</span>
           </div>
           <div style="width: 250px; padding: 16px; background: #f1f5f9; border: 2px solid #0f172a; border-radius: 12px;">
-            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"><span>Mão de Obra:</span> <span>R$ ${os.laborCost.toFixed(2)}</span></div>
-            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #cbd5e1;"><span>Subtotal Peças:</span> <span>R$ ${os.partsCost.toFixed(2)}</span></div>
             <div style="display: flex; justify-content: space-between; font-size: 20px; font-weight: 900; color: #dc2626;"><span>TOTAL:</span> <span>R$ ${os.totalCost.toFixed(2)}</span></div>
           </div>
         </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 60px;">
-          <div style="text-align: center; border-top: 1px solid #0f172a; padding-top: 8px;">
-            <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; margin: 0;">Assinatura do Técnico</p>
-          </div>
-          <div style="text-align: center; border-top: 1px solid #0f172a; padding-top: 8px;">
-            <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; margin: 0;">Assinatura do Cliente</p>
-          </div>
-        </div>
-        
-        <div style="margin-top: 60px; text-align: center; font-size: 9px; color: #94a3b8;">
-           MaqAra Manager - Sistema Profissional de Gestão de Assistência Técnica
-        </div>
       </div>
     `;
-
     try {
       await new Promise(resolve => setTimeout(resolve, 500));
       const canvas = await html2canvas(printArea, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
@@ -515,75 +453,17 @@ export default function App() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       pdf.addImage(imgData, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
       window.open(pdf.output('bloburl'), '_blank');
-    } catch (error) {
-      console.error('Falha ao gerar PDF:', error);
-      window.print();
-    } finally {
-      printArea.style.display = 'none';
-      printArea.innerHTML = '';
-    }
-  };
-
-  const handlePrintClientHistory = (client: Client) => {
-    const clientOrders = orders.filter(o => o.clientId === client.id);
-    const totalSpent = clientOrders.reduce((acc, o) => acc + o.totalCost, 0);
-    const printWindow = document.getElementById('print-area');
-    if (!printWindow) return;
-
-    printWindow.innerHTML = `
-      <div class="p-8 font-sans text-slate-900 bg-white">
-        <div class="flex justify-between items-center mb-8 border-b-2 pb-4">
-          <div><h1 class="text-2xl font-black">HISTÓRICO DO CLIENTE</h1><p class="font-bold text-red-600">${client.name}</p></div>
-          <div class="text-right text-xs">Impresso em: ${new Date().toLocaleDateString()}</div>
-        </div>
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="bg-slate-100 border-b">
-              <th class="p-2 text-left">OS</th>
-              <th class="p-2 text-left">Equipamento</th>
-              <th class="p-2 text-left">Data</th>
-              <th class="p-2 text-left">Status</th>
-              <th class="p-2 text-right">Valor</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${clientOrders.map(o => `
-              <tr class="border-b">
-                <td class="p-2 font-bold">#${o.id}</td>
-                <td class="p-2">${o.printerModel}</td>
-                <td class="p-2">${new Date(o.createdAt).toLocaleDateString()}</td>
-                <td class="p-2">${o.status}</td>
-                <td class="p-2 text-right">R$ ${o.totalCost.toFixed(2)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-          <tfoot>
-            <tr class="bg-slate-50 font-black">
-              <td colspan="4" class="p-4 text-right uppercase">Total Acumulado:</td>
-              <td class="p-4 text-right text-lg text-red-600">R$ ${totalSpent.toFixed(2)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    `;
-    window.print();
+    } catch (error) { console.error(error); window.print(); } finally { printArea.style.display = 'none'; }
   };
 
   const handleAddMachineToDraft = () => {
     const typeInput = document.getElementById('machine-type') as HTMLInputElement;
     const modelInput = document.getElementById('machine-model') as HTMLInputElement;
     const serialInput = document.getElementById('machine-serial') as HTMLInputElement;
-
-    if (!typeInput.value || !modelInput.value) {
-      alert('Tipo e Modelo são obrigatórios.');
-      return;
-    }
-
+    if (!typeInput.value || !modelInput.value) { alert('Tipo e Modelo são obrigatórios.'); return; }
     const newMachine: Machine = { id: Date.now().toString(), type: typeInput.value, model: modelInput.value, serialNumber: serialInput.value };
     setClientMachinesDraft(prev => [...prev, newMachine]);
-    typeInput.value = '';
-    modelInput.value = '';
-    serialInput.value = '';
+    typeInput.value = ''; modelInput.value = ''; serialInput.value = '';
   };
 
   const handleRemoveMachineFromDraft = (id: string) => {
@@ -592,14 +472,14 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#F8FAFC] overflow-hidden text-slate-900 font-sans print:bg-white">
-      {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col shadow-sm print:hidden">
         <div className="p-8 border-b border-slate-100 flex items-center justify-center">
-          <img src={LOGO_IMAGE} alt="Logo" className="h-16 w-auto object-contain" onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/150x60?text=MAQARA'; }} />
+          <img src={LOGO_IMAGE} alt="Logo" className="h-16 w-auto object-contain" />
         </div>
         <nav className="flex-1 p-4 space-y-2 mt-4">
           <NavButton icon={<LayoutDashboard size={20}/>} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-          <NavButton icon={<Wrench size={20}/>} label="Serviços" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />
+          <NavButton icon={<ListOrdered size={20}/>} label="Fila de Orçamento" active={activeTab === 'queue'} onClick={() => setActiveTab('queue')} badge={quoteQueue.length || undefined} />
+          <NavButton icon={<Wrench size={20}/>} label="Serviços (OS)" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />
           <NavButton icon={<Package size={20}/>} label="Estoque" active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} />
           <NavButton icon={<Users size={20}/>} label="Clientes" active={activeTab === 'clients'} onClick={() => setActiveTab('clients')} />
           <NavButton icon={<Bell size={20}/>} label="Lembretes" active={activeTab === 'reminders'} onClick={() => setActiveTab('reminders')} badge={stats.pendingReminders || undefined} />
@@ -612,11 +492,21 @@ export default function App() {
           <div className="flex justify-between items-end mb-4">
             <div>
               <h1 className="text-3xl font-black text-slate-900 tracking-tight">
-                {activeTab === 'dashboard' ? 'Visão Geral' : activeTab === 'orders' ? 'Ordens de Serviço' : activeTab === 'reminders' ? 'Lembretes de Peças' : activeTab === 'inventory' ? 'Estoque' : activeTab === 'clients' ? 'Clientes' : 'Relatórios Gerenciais'}
+                {activeTab === 'dashboard' ? 'Visão Geral' : 
+                 activeTab === 'queue' ? 'Fila de Orçamento' :
+                 activeTab === 'orders' ? 'Ordens de Serviço' : 
+                 activeTab === 'reminders' ? 'Lembretes de Peças' : 
+                 activeTab === 'inventory' ? 'Estoque' : 
+                 activeTab === 'clients' ? 'Clientes' : 'Relatórios Gerenciais'}
               </h1>
+              {activeTab === 'queue' && (
+                <p className="text-slate-500 font-medium text-sm mt-1 flex items-center gap-1">
+                  <Timer size={14}/> Organizado por ordem de chegada (mais antigos primeiro)
+                </p>
+              )}
             </div>
             <div className="flex gap-3">
-              {activeTab === 'orders' && <button onClick={() => { setClientSearch(''); setSelectedClientId(''); setSelectedMachineId(''); setIsOrderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Nova OS</button>}
+              {(activeTab === 'orders' || activeTab === 'queue') && <button onClick={() => { setClientSearch(''); setSelectedClientId(''); setSelectedMachineId(''); setIsOrderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Nova OS</button>}
               {activeTab === 'clients' && <button onClick={() => { setClientMachinesDraft([]); setIsClientModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Cliente</button>}
               {activeTab === 'inventory' && (
                 <div className="flex gap-2">
@@ -641,7 +531,7 @@ export default function App() {
                 <DashboardStat label="Faturamento" value={`R$ ${stats.revenue.toFixed(2)}`} icon={<TrendingUp className="text-green-600"/>} trend="+12%" />
                 <DashboardStat label="OS Ativas" value={stats.pending.toString()} icon={<Clock className="text-amber-600"/>} trend="Abertas" />
                 <DashboardStat label="Estoque Baixo" value={stats.lowStock.toString()} icon={<AlertTriangle className="text-red-600"/>} trend="Crítico" critical={stats.lowStock > 0} />
-                <DashboardStat label="A Pedir" value={stats.pendingReminders.toString()} icon={<ShoppingCart className="text-red-600"/>} trend="Peças" critical={stats.pendingReminders > 0} />
+                <DashboardStat label="Na Fila" value={quoteQueue.length.toString()} icon={<ListOrdered className="text-blue-600"/>} trend="Orçamentos" />
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
@@ -667,51 +557,68 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === 'reports' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              <div className="lg:col-span-2 space-y-8">
-                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="font-black text-slate-800 flex items-center gap-2"><FileText size={18} className="text-red-600"/> Peças Mais Utilizadas</h3>
-                    <button onClick={() => window.print()} className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-red-600 flex items-center gap-2 transition-all"><Printer size={16}/> Imprimir Tudo</button>
-                  </div>
-                  <div className="space-y-4">
-                    {topParts.map((p, i) => (
-                      <div key={i} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                        <div className="flex items-center gap-4">
-                          <span className="w-8 h-8 bg-red-600 text-white flex items-center justify-center rounded-lg font-black text-xs">{i+1}</span>
-                          <span className="font-bold">{p.name}</span>
+          {activeTab === 'queue' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                  <tr>
+                    <th className="p-6 w-20">Fila</th>
+                    <th className="p-6">OS / Equipamento</th>
+                    <th className="p-6">Cliente</th>
+                    <th className="p-6">Entrada</th>
+                    <th className="p-6">Status Orçamento</th>
+                    <th className="p-6 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {quoteQueue.length === 0 ? (
+                    <tr><td colSpan={6} className="p-20 text-center text-slate-400 italic font-medium">Nenhuma máquina aguardando orçamento no momento.</td></tr>
+                  ) : quoteQueue.map((o, idx) => (
+                    <tr key={o.id} onClick={() => setSelectedOrder(o)} className="hover:bg-slate-50/50 cursor-pointer group transition-colors">
+                      <td className="p-6">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm ${idx === 0 ? 'bg-red-600 text-white shadow-lg animate-pulse' : 'bg-slate-100 text-slate-600'}`}>
+                          {idx + 1}º
                         </div>
-                        <span className="font-black text-red-600">{p.qty} un</span>
-                      </div>
-                    ))}
-                    {topParts.length === 0 && <p className="text-center py-10 text-slate-400 italic">Nenhum dado de peças utilizado ainda.</p>}
-                  </div>
-                </div>
-                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-                  <h3 className="font-black text-slate-800 mb-6">Métricas de Faturamento</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-6 bg-green-50 rounded-2xl border border-green-100">
-                      <p className="text-[10px] font-black uppercase text-green-600 mb-1">Total Finalizado</p>
-                      <p className="text-2xl font-black text-green-700">R$ {stats.revenue.toFixed(2)}</p>
-                    </div>
-                    <div className="p-6 bg-amber-50 rounded-2xl border border-amber-100">
-                      <p className="text-[10px] font-black uppercase text-amber-600 mb-1">Ticket Médio (OS)</p>
-                      <p className="text-2xl font-black text-amber-700">R$ {orders.length > 0 ? (stats.revenue / orders.length).toFixed(2) : '0.00'}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-8">
-                <div className="bg-slate-900 text-white p-8 rounded-3xl shadow-2xl">
-                  <h3 className="font-black text-red-600 mb-4 flex items-center gap-2"><History size={18}/> Saúde do Negócio</h3>
-                  <div className="space-y-6">
-                    <div><p className="text-xs text-slate-400 font-bold uppercase mb-2">Total de Ordens</p><p className="text-3xl font-black">{orders.length}</p></div>
-                    <div><p className="text-xs text-slate-400 font-bold uppercase mb-2">Clientes Cadastrados</p><p className="text-3xl font-black">{clients.length}</p></div>
-                    <div className="pt-4 border-t border-slate-800"><p className="text-[10px] font-black uppercase text-slate-500 mb-4">Eficiência de Reparo</p><div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden"><div className="bg-red-600 h-full" style={{ width: `${(orders.filter(o => o.status === OrderStatus.READY || o.status === OrderStatus.DELIVERED).length / (orders.length || 1) * 100)}%` }}></div></div><p className="text-right text-[10px] font-bold mt-2 text-slate-400">{(orders.filter(o => o.status === OrderStatus.READY || o.status === OrderStatus.DELIVERED).length / (orders.length || 1) * 100).toFixed(0)}% de conclusão</p></div>
-                  </div>
-                </div>
-              </div>
+                      </td>
+                      <td className="p-6">
+                        <div className="font-black text-red-600 text-sm">#{o.id}</div>
+                        <div className="text-xs text-slate-500 font-bold">{o.printerModel}</div>
+                      </td>
+                      <td className="p-6 font-bold text-sm">
+                        {clients.find(c => c.id === o.clientId)?.name || 'N/A'}
+                      </td>
+                      <td className="p-6">
+                        <div className="text-xs font-bold text-slate-700">{new Date(o.createdAt).toLocaleDateString()}</div>
+                        <div className="text-[10px] text-slate-400 font-medium">{new Date(o.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                      </td>
+                      <td className="p-6">
+                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase border ${
+                          o.quoteStatus === 'Aguardando orçamento' ? 'bg-amber-50 text-amber-700 border-amber-100' : 
+                          'bg-blue-50 text-blue-700 border-blue-100'
+                        }`}>
+                          {o.quoteStatus}
+                        </span>
+                      </td>
+                      <td className="p-6 text-right">
+                        <div className="flex justify-end gap-2">
+                           <button 
+                             onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(o.id, 'Em orçamento'); }}
+                             className="p-2 text-slate-400 hover:text-blue-600 title='Iniciar Orçamento'"
+                           >
+                             <Timer size={18}/>
+                           </button>
+                           <button 
+                             onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(o.id, 'Orçamento concluído'); }}
+                             className="p-2 text-slate-400 hover:text-green-600 title='Concluir'"
+                           >
+                             <CheckCircle size={18}/>
+                           </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 
@@ -780,7 +687,6 @@ export default function App() {
                       <td className="p-6 font-bold text-slate-600">{c.phone}</td>
                       <td className="p-6 font-bold text-xs">{(c.machines || []).length} cadastradas</td>
                       <td className="p-6 text-right flex justify-end gap-3">
-                        <button onClick={() => handlePrintClientHistory(c)} className="p-2 text-slate-400 hover:text-blue-600 flex items-center gap-1 text-[10px] font-black uppercase"><History size={16}/> Histórico</button>
                         <button onClick={() => handleDeleteClient(c.id)} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button>
                       </td>
                     </tr>
@@ -822,7 +728,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Drawer Detalhes OS */}
       {selectedOrder && editingOrder && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-end print:hidden">
           <div className="w-full max-w-2xl bg-white h-full shadow-2xl overflow-y-auto animate-slide-in-right flex flex-col">
@@ -838,7 +743,16 @@ export default function App() {
             </div>
             <div className="p-8 space-y-8 flex-1">
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
-                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4">Atualizar Status</p>
+                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4">Atualizar Fila / Orçamento</p>
+                <div className="flex flex-wrap gap-2">
+                  {(['Aguardando orçamento', 'Em orçamento', 'Orçamento concluído'] as QuoteStatus[]).map(s => (
+                    <button key={s} onClick={() => handleUpdateQuoteStatus(editingOrder.id, s)} className={`px-4 py-2 rounded-xl text-[10px] font-black border transition-all ${editingOrder.quoteStatus === s ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-600 border-slate-200'}`}>{s}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4">Atualizar Status Reparo</p>
                 <div className="flex flex-wrap gap-2">
                   {Object.values(OrderStatus).map(s => (
                     <button key={s} onClick={() => handleUpdateStatus(editingOrder.id, s)} className={`px-4 py-2 rounded-xl text-[10px] font-black border transition-all ${editingOrder.status === s ? 'bg-red-600 text-white border-red-600 shadow-md' : 'bg-white text-slate-600 border-slate-200'}`}>{s}</button>
@@ -878,22 +792,18 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Nova OS */}
       <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova Ordem de Serviço">
         <form onSubmit={(e) => { 
           e.preventDefault(); 
           const formData = new FormData(e.currentTarget); 
           const osId = formData.get('osId') as string;
-          
           if (!osId) { alert('Informe o número da OS.'); return; }
           if (orders.some(o => o.id === osId)) { alert('Este número de OS já existe. Escolha outro.'); return; }
           if (!selectedClientId) { alert('Selecione um cliente.'); return; }
-          
           const client = clients.find(c => c.id === selectedClientId);
           const machine = client?.machines?.find(m => m.id === selectedMachineId);
-          
           if (!selectedMachineId) { alert('Selecione uma máquina do cliente.'); return; }
-
+          const now = new Date();
           const newOrder: ServiceOrder = { 
             id: osId, 
             clientId: selectedClientId, 
@@ -902,29 +812,21 @@ export default function App() {
             serialNumber: machine?.serialNumber || 'N/S não especificado', 
             problemDescription: formData.get('problemDescription') as string, 
             status: OrderStatus.PENDING, 
-            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Recepção' }], 
+            quoteStatus: 'Aguardando orçamento', // Inicia na fila
+            history: [{ status: OrderStatus.PENDING, date: now, user: 'Recepção' }], 
             priority: formData.get('priority') as any || 'Normal', 
-            laborCost: 0, 
-            partsCost: 0, 
-            totalCost: 0, 
-            partsUsed: [], 
-            createdAt: new Date(), 
-            updatedAt: new Date() 
+            laborCost: 0, partsCost: 0, totalCost: 0, partsUsed: [], 
+            createdAt: now, updatedAt: now 
           }; 
           updateState('orders', [newOrder, ...orders]); 
-          setIsOrderModalOpen(false); 
-          setClientSearch(''); 
-          setSelectedClientId(''); 
-          setSelectedMachineId('');
+          setIsOrderModalOpen(false); setClientSearch(''); setSelectedClientId(''); setSelectedMachineId('');
         }} className="space-y-6">
           <div className="grid grid-cols-1 gap-4">
             <div className="space-y-1">
               <label className="text-[10px] font-black uppercase">Número da OS</label>
               <input name="osId" type="text" pattern="[0-9]*" inputMode="numeric" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-red-600 text-lg" placeholder="Digite o número da OS..." required />
             </div>
-
             <div className="space-y-1 relative"><label className="text-[10px] font-black uppercase">1. Buscar Cliente</label><input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) { setSelectedClientId(''); setSelectedMachineId(''); } }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome do cliente..." />{showClientResults && filteredClients.length > 0 && (<div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border rounded-2xl shadow-2xl max-h-48 overflow-y-auto">{filteredClients.map(c => (<div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b">{c.name}</div>))}</div>)}</div>
-            
             {selectedClientId && (
                <div className="space-y-1">
                  <label className="text-[10px] font-black uppercase">2. Selecionar Máquina</label>
@@ -934,7 +836,6 @@ export default function App() {
                       <option key={m.id} value={m.id}>{m.type} - {m.model} (SN: {m.serialNumber || 'N/A'})</option>
                     ))}
                  </select>
-                 {(clients.find(c => c.id === selectedClientId)?.machines || []).length === 0 && <p className="text-[10px] text-red-600 font-bold">Este cliente não possui máquinas cadastradas. Vá em 'Clientes' para adicionar.</p>}
                </div>
             )}
           </div>
@@ -944,21 +845,11 @@ export default function App() {
         </form>
       </SaaSModal>
 
-      {/* Outros modais mantidos */}
       <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Gerenciar Cliente e Máquinas">
         <form onSubmit={(e) => { 
-          e.preventDefault(); 
-          const formData = new FormData(e.currentTarget); 
-          const newClient: Client = { 
-            id: Date.now().toString(), 
-            name: formData.get('name') as string, 
-            phone: formData.get('phone') as string, 
-            email: formData.get('email') as string,
-            machines: clientMachinesDraft
-          };
-          updateState('clients', [...clients, newClient]); 
-          setIsClientModalOpen(false); 
-          setClientMachinesDraft([]);
+          e.preventDefault(); const formData = new FormData(e.currentTarget); 
+          const newClient: Client = { id: Date.now().toString(), name: formData.get('name') as string, phone: formData.get('phone') as string, email: formData.get('email') as string, machines: clientMachinesDraft };
+          updateState('clients', [...clients, newClient]); setIsClientModalOpen(false); setClientMachinesDraft([]);
         }} className="space-y-6">
           <div className="space-y-4">
             <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo" required />
@@ -967,8 +858,8 @@ export default function App() {
           <div className="border-t pt-6 space-y-4">
             <p className="text-[10px] font-black uppercase text-slate-400">Equipamentos do Cliente</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              <input id="machine-type" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Tipo (Ex: Impressora)" />
-              <input id="machine-model" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Modelo (Ex: L3250)" />
+              <input id="machine-type" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Tipo" />
+              <input id="machine-model" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Modelo" />
               <div className="flex gap-2">
                 <input id="machine-serial" type="text" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Serial" />
                 <button type="button" onClick={handleAddMachineToDraft} className="bg-slate-900 text-white p-3 rounded-xl"><Plus size={18}/></button>
@@ -990,10 +881,10 @@ export default function App() {
       <SaaSModal isOpen={isInventoryModalOpen} onClose={() => setIsInventoryModalOpen(false)} title="Novo Item de Estoque">
         <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); updateState('inventory', [...inventory, { id: Date.now().toString(), name: formData.get('name') as string, quantity: parseInt(formData.get('quantity') as string), minStock: parseInt(formData.get('minStock') as string), costPrice: parseFloat(formData.get('costPrice') as string), sellPrice: parseFloat(formData.get('sellPrice') as string) }]); setIsInventoryModalOpen(false); }} className="space-y-6">
           <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
-          <div className="grid grid-cols-2 gap-4"><input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Quantidade Atual" required /><input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Estoque Mínimo" /></div>
+          <div className="grid grid-cols-2 gap-4"><input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd" required /><input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Mín" /></div>
           <div className="grid grid-cols-2 gap-4">
-             <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço de Custo" required />
-             <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço de Venda" required />
+             <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Custo" required />
+             <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Venda" required />
           </div>
           <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Adicionar ao Estoque</button>
         </form>
@@ -1001,9 +892,9 @@ export default function App() {
 
       <SaaSModal isOpen={isReminderModalOpen} onClose={() => setIsReminderModalOpen(false)} title={editingReminder ? "Editar Lembrete" : "Novo Lembrete de Peça"}>
         <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); const reminderData = { partName: formData.get('partName') as string, quantity: parseInt(formData.get('quantity') as string), notes: formData.get('notes') as string, status: editingReminder ? editingReminder.status : PartReminderStatus.PENDING }; if (editingReminder) { updateState('reminders', reminders.map(r => r.id === editingReminder.id ? { ...r, ...reminderData } : r)); } else { updateState('reminders', [{ id: Date.now().toString(), ...reminderData, createdAt: new Date() }, ...reminders]); } setIsReminderModalOpen(false); }} className="space-y-6">
-          <input name="partName" defaultValue={editingReminder?.partName} type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça para pedido" required />
-          <input name="quantity" defaultValue={editingReminder?.quantity} type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Quantidade necessária" required />
-          <textarea name="notes" defaultValue={editingReminder?.notes} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Observações (opcional)" rows={3}></textarea>
+          <input name="partName" defaultValue={editingReminder?.partName} type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Peça" required />
+          <input name="quantity" defaultValue={editingReminder?.quantity} type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd" required />
+          <textarea name="notes" defaultValue={editingReminder?.notes} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Obs" rows={3}></textarea>
           <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">{editingReminder ? 'Atualizar' : 'Criar Lembrete'}</button>
         </form>
       </SaaSModal>
@@ -1011,7 +902,6 @@ export default function App() {
   );
 }
 
-// Subcomponentes
 function NavButton({icon, label, active, onClick, badge}: any) {
   return (
     <button onClick={onClick} className={`w-full flex items-center justify-between gap-3 px-4 py-3.5 rounded-2xl transition-all ${active ? 'bg-red-600 text-white font-black shadow-lg scale-[1.02]' : 'text-slate-500 hover:bg-red-50 hover:text-red-600 font-bold'}`}>

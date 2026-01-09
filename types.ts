@@ -14,6 +14,8 @@ export enum PartReminderStatus {
   RECEIVED = 'Recebido'
 }
 
+export type QuoteStatus = 'Aguardando orçamento' | 'Em orçamento' | 'Orçamento concluído';
+
 export interface Machine {
   id: string;
   type: string;
@@ -65,12 +67,13 @@ export interface StatusHistoryEntry {
 export interface ServiceOrder {
   id: string;
   clientId: string;
-  machineId?: string; // Referência à máquina do cliente
-  printerModel: string; // Mantido para retrocompatibilidade e histórico
-  serialNumber: string; // Mantido para retrocompatibilidade e histórico
+  machineId?: string; 
+  printerModel: string; 
+  serialNumber: string; 
   problemDescription: string;
   diagnosis?: string;
   status: OrderStatus;
+  quoteStatus: QuoteStatus; // Novo campo para fila de orçamento
   history: StatusHistoryEntry[];
   createdAt: Date;
   updatedAt: Date;
