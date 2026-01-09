@@ -1,12 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   LayoutDashboard, 
   Wrench, 
   Users, 
   Package, 
-  Settings, 
   Plus, 
-  Search, 
   BrainCircuit, 
   MessageCircle, 
   ChevronRight, 
@@ -17,344 +15,333 @@ import {
   X,
   History,
   Phone,
-  Mail,
   User,
   Trash2,
-  ChevronDown,
   Copy,
-  ExternalLink
+  ExternalLink,
+  BarChart3,
+  TrendingUp
 } from 'lucide-react';
 import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
+  PieChart, 
+  Pie, 
+  Cell, 
   Tooltip, 
-  Legend, 
   ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid
 } from 'recharts';
 import { Client, InventoryItem, ServiceOrder, OrderStatus, StatusHistoryEntry } from './types';
 import { getPrinterDiagnosis, generateClientMessage } from './services/geminiService';
 
-// --- MOCK DATA INITIALIZATION ---
-const MOCK_CLIENTS: Client[] = [
+// Mock inicial
+const INITIAL_CLIENTS: Client[] = [
   { id: '1', name: 'Empresa ABC Ltda', phone: '(11) 99999-1234', email: 'contato@abc.com' },
   { id: '2', name: 'João da Silva', phone: '(11) 98888-5678', email: 'joao@gmail.com' },
-  { id: '3', name: 'Papelaria Central', phone: '(11) 97777-4321', email: 'compras@papelaria.com' },
 ];
 
-const MOCK_INVENTORY: InventoryItem[] = [
-  { id: '1', name: 'Fusor HP P1102', quantity: 3, costPrice: 150, sellPrice: 350, minStock: 2 },
+const INITIAL_INVENTORY: InventoryItem[] = [
+  { id: '1', name: 'Fusor HP P1102', quantity: 1, costPrice: 150, sellPrice: 350, minStock: 2 },
   { id: '2', name: 'Pickup Roller Epson L3150', quantity: 15, costPrice: 20, sellPrice: 60, minStock: 5 },
-  { id: '3', name: 'Cabeça de Impressão Canon', quantity: 1, costPrice: 400, sellPrice: 800, minStock: 1 },
+  { id: '3', name: 'Tinta Black 1L', quantity: 8, costPrice: 45, sellPrice: 120, minStock: 10 },
 ];
-
-const MOCK_ORDERS: ServiceOrder[] = [
-  { 
-    id: 'OS-1001', 
-    clientId: '1', 
-    printerModel: 'HP Laserjet P1102w', 
-    serialNumber: 'VNB3B00001', 
-    problemDescription: 'Manchas na impressão e barulho forte ao ligar.', 
-    status: OrderStatus.DIAGNOSING, 
-    history: [
-        { status: OrderStatus.PENDING, date: new Date(Date.now() - 86400000 * 2), user: 'Sistema' },
-        { status: OrderStatus.DIAGNOSING, date: new Date(Date.now() - 86400000 * 1), user: 'Técnico Admin' }
-    ],
-    createdAt: new Date(Date.now() - 86400000 * 2), 
-    updatedAt: new Date(), 
-    totalCost: 0,
-    priority: 'Alta'
-  }
-];
-
-// --- HELPER COMPONENTS ---
-
-const StatusBadge = ({ status }: { status: OrderStatus }) => {
-  const colors = {
-    [OrderStatus.PENDING]: 'bg-yellow-100 text-yellow-800',
-    [OrderStatus.DIAGNOSING]: 'bg-blue-100 text-blue-800',
-    [OrderStatus.WAITING_APPROVAL]: 'bg-purple-100 text-purple-800',
-    [OrderStatus.IN_REPAIR]: 'bg-indigo-100 text-indigo-800',
-    [OrderStatus.READY]: 'bg-green-100 text-green-800',
-    [OrderStatus.DELIVERED]: 'bg-gray-100 text-gray-800',
-  };
-  return (
-    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${colors[status]}`}>
-      {status}
-    </span>
-  );
-};
-
-// --- MAIN APP ---
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'inventory' | 'clients'>('dashboard');
-  const [orders, setOrders] = useState<ServiceOrder[]>(MOCK_ORDERS);
-  const [inventory, setInventory] = useState<InventoryItem[]>(MOCK_INVENTORY);
-  const [clients, setClients] = useState<Client[]>(MOCK_CLIENTS);
+  const [orders, setOrders] = useState<ServiceOrder[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>(INITIAL_INVENTORY);
+  const [clients, setClients] = useState<Client[]>(INITIAL_CLIENTS);
 
-  // Modal States
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [isInventoryModalOpen, setIsInventoryModalOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
   
-  // AI States
   const [aiDiagnosis, setAiDiagnosis] = useState<string>('');
   const [aiMessage, setAiMessage] = useState<string>('');
   const [isAiLoading, setIsAiLoading] = useState(false);
 
-  // --- DERIVED DATA ---
+  // Estatísticas
   const stats = useMemo(() => {
     const revenue = orders
       .filter(o => o.status === OrderStatus.DELIVERED || o.status === OrderStatus.READY)
       .reduce((acc, curr) => acc + (curr.totalCost || 0), 0);
     const pending = orders.filter(o => o.status !== OrderStatus.DELIVERED).length;
-    const completed = orders.filter(o => o.status === OrderStatus.DELIVERED).length;
     const lowStock = inventory.filter(i => i.quantity <= i.minStock).length;
-    return { revenue, pending, completed, lowStock };
+    return { revenue, pending, lowStock };
   }, [orders, inventory]);
 
-  const ordersByStatusData = useMemo(() => {
+  const chartData = useMemo(() => {
     const counts = orders.reduce((acc, order) => {
       acc[order.status] = (acc[order.status] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    return Object.keys(counts).map(key => ({ name: key, value: counts[key] }));
+    const baseData = Object.keys(counts).map(key => ({ name: key, value: counts[key] }));
+    return baseData.length > 0 ? baseData : [{ name: 'Sem Dados', value: 1 }];
   }, [orders]);
 
-  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#64748b'];
+  const weeklyData = [
+    { name: 'Seg', total: 4 },
+    { name: 'Ter', total: 7 },
+    { name: 'Qua', total: 5 },
+    { name: 'Qui', total: 8 },
+    { name: 'Sex', total: 12 },
+  ];
 
-  // --- ACTIONS ---
+  const COLORS = ['#dc2626', '#ef4444', '#f87171', '#fca5a5', '#fee2e2', '#64748b'];
 
-  const handleCreateOrder = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const newOrder: ServiceOrder = {
-      id: `OS-${Date.now().toString().slice(-4)}`,
-      clientId: formData.get('clientId') as string,
-      printerModel: formData.get('printerModel') as string,
-      serialNumber: formData.get('serialNumber') as string,
-      problemDescription: formData.get('problemDescription') as string,
-      status: OrderStatus.PENDING,
-      history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Técnico Admin' }],
-      priority: formData.get('priority') as 'Baixa' | 'Normal' | 'Alta',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      totalCost: 0
-    };
-    setOrders(prev => [newOrder, ...prev]);
-    setIsOrderModalOpen(false);
+  // Ações
+  const handleDeleteOrder = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Excluir esta Ordem de Serviço permanentemente?')) {
+      setOrders(prev => prev.filter(o => o.id !== id));
+      if (selectedOrder?.id === id) setSelectedOrder(null);
+    }
+  };
+
+  const handleDeleteClient = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Excluir este cliente?')) {
+      setClients(prev => prev.filter(c => c.id !== id));
+    }
+  };
+
+  const handleDeleteInventoryItem = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Remover esta peça do estoque?')) {
+      setInventory(prev => prev.filter(i => i.id !== id));
+    }
   };
 
   const handleUpdateStatus = async (id: string, newStatus: OrderStatus) => {
     const historyEntry: StatusHistoryEntry = { status: newStatus, date: new Date(), user: 'Técnico Admin' };
     
-    let updatedOrder: ServiceOrder | undefined;
+    let targetOrder: ServiceOrder | undefined;
 
     setOrders(prev => prev.map(o => {
-        if (o.id === id) {
-            updatedOrder = { ...o, status: newStatus, updatedAt: new Date(), history: [historyEntry, ...o.history] };
-            return updatedOrder;
-        }
-        return o;
+      if (o.id === id) {
+        targetOrder = { ...o, status: newStatus, updatedAt: new Date(), history: [historyEntry, ...o.history] };
+        return targetOrder;
+      }
+      return o;
     }));
 
-    if (selectedOrder && selectedOrder.id === id) {
-        setSelectedOrder(prev => prev ? { ...prev, status: newStatus, history: [historyEntry, ...prev.history] } : null);
+    if (selectedOrder?.id === id) {
+      setSelectedOrder(prev => prev ? { ...prev, status: newStatus, history: [historyEntry, ...prev.history] } : null);
     }
 
-    // AUTO AI NOTIFICATION LOGIC
-    if (updatedOrder && (newStatus === OrderStatus.READY || newStatus === OrderStatus.DELIVERED)) {
-        setIsAiLoading(true);
-        const client = clients.find(c => c.id === updatedOrder?.clientId);
-        const msg = await generateClientMessage(
-            client?.name || 'Cliente',
-            updatedOrder.printerModel,
-            newStatus,
-            newStatus === OrderStatus.READY ? "Equipamento pronto para retirada." : "Equipamento entregue ao cliente."
-        );
-        setAiMessage(msg);
-        setIsAiLoading(false);
-    }
-  };
-
-  const handleDeleteOrder = (id: string) => {
-    if (window.confirm('Excluir esta Ordem de Serviço permanentemente?')) {
-        setOrders(prev => prev.filter(o => o.id !== id));
-        if (selectedOrder?.id === id) setSelectedOrder(null);
+    if (targetOrder && (newStatus === OrderStatus.READY || newStatus === OrderStatus.DELIVERED)) {
+      setIsAiLoading(true);
+      const client = clients.find(c => c.id === targetOrder?.clientId);
+      const msg = await generateClientMessage(
+        client?.name || 'Cliente',
+        targetOrder.printerModel,
+        newStatus,
+        newStatus === OrderStatus.READY ? "Equipamento disponível para retirada." : "Serviço finalizado com sucesso."
+      );
+      setAiMessage(msg);
+      setIsAiLoading(false);
     }
   };
 
-  const handleDeleteClient = (id: string) => {
-    if (window.confirm('Excluir este cliente? Todas as OS vinculadas perderão a referência de nome.')) {
-        setClients(prev => prev.filter(c => c.id !== id));
-    }
-  };
-
-  const handleDeleteInventoryItem = (id: string) => {
-    if (window.confirm('Remover esta peça do estoque?')) {
-        setInventory(prev => prev.filter(i => i.id !== id));
-    }
-  };
-
-  const handleCreateClient = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const newClient: Client = {
-      id: Date.now().toString(),
-      name: formData.get('name') as string,
-      phone: formData.get('phone') as string,
-      email: formData.get('email') as string,
+  const StatusBadge = ({ status }: { status: OrderStatus }) => {
+    const colors: any = {
+      [OrderStatus.PENDING]: 'bg-amber-100 text-amber-800 border-amber-200',
+      [OrderStatus.DIAGNOSING]: 'bg-red-50 text-red-700 border-red-100',
+      [OrderStatus.WAITING_APPROVAL]: 'bg-slate-100 text-slate-700 border-slate-200',
+      [OrderStatus.READY]: 'bg-green-100 text-green-800 border-green-200',
+      [OrderStatus.DELIVERED]: 'bg-slate-800 text-white border-slate-700',
     };
-    setClients(prev => [...prev, newClient]);
-    setIsClientModalOpen(false);
+    return <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase border ${colors[status] || 'bg-gray-100'}`}>{status}</span>;
   };
-
-  const handleCreateInventoryItem = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const newItem: InventoryItem = {
-      id: Date.now().toString(),
-      name: formData.get('name') as string,
-      quantity: parseInt(formData.get('quantity') as string) || 0,
-      costPrice: parseFloat(formData.get('costPrice') as string) || 0,
-      sellPrice: parseFloat(formData.get('sellPrice') as string) || 0,
-      minStock: parseInt(formData.get('minStock') as string) || 1,
-    };
-    setInventory(prev => [...prev, newItem]);
-    setIsInventoryModalOpen(false);
-  };
-
-  // --- RENDERERS ---
-
-  const renderDashboard = () => (
-    <div className="space-y-6 animate-fade-in">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Faturamento OS" value={`R$ ${stats.revenue.toFixed(2)}`} icon={<Package size={18}/>} color="bg-green-100 text-green-600" />
-        <StatCard title="OS Pendentes" value={stats.pending.toString()} icon={<Clock size={18}/>} color="bg-yellow-100 text-yellow-600" />
-        <StatCard title="Concluídas" value={stats.completed.toString()} icon={<CheckCircle size={18}/>} color="bg-blue-100 text-blue-600" />
-        <StatCard title="Reposição Peças" value={stats.lowStock.toString()} icon={<AlertTriangle size={18}/>} color="bg-red-100 text-red-600" />
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-80">
-          <h3 className="text-lg font-semibold mb-6">Status Geral</h3>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={ordersByStatusData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                {ordersByStatusData.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} />)}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-80 flex flex-col items-center justify-center text-center">
-            <BrainCircuit size={48} className="text-blue-500 mb-4 opacity-50" />
-            <p className="text-slate-500 font-medium">IA ativa monitorando processos</p>
-            <p className="text-xs text-slate-400 max-w-xs mt-2">Geração automática de orçamentos e mensagens de entrega ativada.</p>
-        </div>
-      </div>
-    </div>
-  );
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
-      {/* SIDEBAR */}
-      <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col">
-        <div className="p-6 border-b border-slate-100 flex items-center gap-2">
-            <Printer size={28} className="text-blue-600" />
-            <span className="text-xl font-bold text-slate-900 tracking-tight">PrintTech</span>
+    <div className="flex h-screen bg-[#F8FAFC] overflow-hidden text-slate-900 font-sans">
+      {/* Sidebar */}
+      <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col shadow-sm">
+        <div className="p-8 border-b border-slate-100 flex items-center gap-3">
+          <div className="bg-red-600 p-2 rounded-lg shadow-md shadow-red-200">
+            <Printer size={24} className="text-white" />
+          </div>
+          <span className="text-xl font-black tracking-tighter text-slate-900">PRINT<span className="text-red-600">TECH</span></span>
         </div>
-        <nav className="flex-1 p-4 space-y-1">
-          <NavButton icon={<LayoutDashboard size={20}/>} label="Painel" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+        <nav className="flex-1 p-4 space-y-2 mt-4">
+          <NavButton icon={<LayoutDashboard size={20}/>} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
           <NavButton icon={<Wrench size={20}/>} label="Ordens de Serviço" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />
           <NavButton icon={<Package size={20}/>} label="Estoque" active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} />
           <NavButton icon={<Users size={20}/>} label="Clientes" active={activeTab === 'clients'} onClick={() => setActiveTab('clients')} />
         </nav>
+        <div className="p-6 border-t border-slate-100">
+          <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-xl">
+             <div className="w-8 h-8 rounded-full bg-red-600 flex items-center justify-center text-white text-xs font-bold">AD</div>
+             <div className="overflow-hidden">
+               <p className="text-xs font-bold truncate">Admin Assistência</p>
+               <p className="text-[10px] text-slate-400">Plano Pro</p>
+             </div>
+          </div>
+        </div>
       </aside>
 
-      {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-y-auto p-8">
-        <div className="max-w-7xl mx-auto">
-          {activeTab === 'dashboard' && renderDashboard()}
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto p-8 relative">
+        <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
           
-          {activeTab === 'orders' && (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="p-6 border-b flex justify-between items-center">
-                <h2 className="text-xl font-bold">Ordens de Serviço</h2>
-                <button onClick={() => setIsOrderModalOpen(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700">
-                  <Plus size={18}/> Nova OS
-                </button>
-              </div>
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-                  <tr>
-                    <th className="p-4">OS</th>
-                    <th className="p-4">Cliente / Máquina</th>
-                    <th className="p-4">Status</th>
-                    <th className="p-4">Prioridade</th>
-                    <th className="p-4">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {orders.map(o => (
-                    <tr key={o.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-bold text-blue-600">{o.id}</td>
-                      <td className="p-4">
-                        <div className="font-medium text-slate-800">{clients.find(c => c.id === o.clientId)?.name}</div>
-                        <div className="text-xs text-slate-500">{o.printerModel}</div>
-                      </td>
-                      <td className="p-4"><StatusBadge status={o.status}/></td>
-                      <td className="p-4">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${o.priority === 'Alta' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
-                          {o.priority}
-                        </span>
-                      </td>
-                      <td className="p-4 flex items-center gap-2">
-                        <button onClick={() => setSelectedOrder(o)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"><ChevronRight size={20}/></button>
-                        <button onClick={() => handleDeleteOrder(o.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {/* Header Section */}
+          <div className="flex justify-between items-end mb-4">
+            <div>
+              <h1 className="text-3xl font-black text-slate-900 tracking-tight capitalize">{activeTab === 'dashboard' ? 'Visão Geral' : activeTab}</h1>
+              <p className="text-slate-500 text-sm mt-1">Gerencie sua assistência técnica com inteligência.</p>
             </div>
+            {activeTab !== 'dashboard' && (
+              <button 
+                onClick={() => activeTab === 'orders' ? setIsOrderModalOpen(true) : activeTab === 'clients' ? setIsClientModalOpen(true) : setIsInventoryModalOpen(true)}
+                className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl shadow-red-100 flex items-center gap-2 transition-all active:scale-95"
+              >
+                <Plus size={20}/> Novo Registro
+              </button>
+            )}
+          </div>
+
+          {activeTab === 'dashboard' && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <DashboardStat label="Receita Estimada" value={`R$ ${stats.revenue.toFixed(2)}`} icon={<TrendingUp className="text-green-600"/>} trend="+12.5%" />
+                <DashboardStat label="OS em Aberto" value={stats.pending.toString()} icon={<Clock className="text-amber-600"/>} trend="Pendentes" />
+                <DashboardStat label="Atenção Estoque" value={stats.lowStock.toString()} icon={<AlertTriangle className="text-red-600"/>} trend="Abaixo do mín." critical={stats.lowStock > 0} />
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Gráfico de Status */}
+                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="font-black text-slate-800 flex items-center gap-2"><BarChart3 size={18} className="text-red-600"/> Distribuição de Status</h3>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Atualizado agora</span>
+                  </div>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={chartData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={8} dataKey="value" stroke="none">
+                          {chartData.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} cornerRadius={4} />)}
+                        </Pie>
+                        <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Gráfico de Desempenho Semanal */}
+                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="font-black text-slate-800 flex items-center gap-2"><TrendingUp size={18} className="text-red-600"/> Ordens por Dia</h3>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Últimos 5 dias</span>
+                  </div>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={weeklyData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
+                        <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                        <Bar dataKey="total" fill="#dc2626" radius={[6, 6, 0, 0]} barSize={32} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+            </>
           )}
 
           {activeTab === 'inventory' && (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="p-6 border-b flex justify-between items-center">
-                <h2 className="text-xl font-bold">Estoque de Peças</h2>
-                <button onClick={() => setIsInventoryModalOpen(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2">
-                  <Plus size={18}/> Novo Item
-                </button>
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                    <tr>
+                      <th className="p-6">Nome da Peça / Item</th>
+                      <th className="p-6">Qtd Atual</th>
+                      <th className="p-6">Custo de Compra</th>
+                      <th className="p-6">Preço de Venda</th>
+                      <th className="p-6">Mínimo</th>
+                      <th className="p-6 text-center">Status</th>
+                      <th className="p-6 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {inventory.map(i => {
+                      const isLow = i.quantity <= i.minStock;
+                      return (
+                        <tr key={i.id} className={`hover:bg-slate-50 transition-colors ${isLow ? 'bg-red-50/30' : ''}`}>
+                          <td className="p-6">
+                            <div className="font-bold text-slate-900">{i.name}</div>
+                            <div className="text-[10px] text-slate-400">REF: {i.id.slice(-6)}</div>
+                          </td>
+                          <td className="p-6">
+                            <span className={`font-black text-lg ${isLow ? 'text-red-600' : 'text-slate-700'}`}>{i.quantity}</span>
+                          </td>
+                          <td className="p-6 text-sm text-slate-500">R$ {i.costPrice.toFixed(2)}</td>
+                          <td className="p-6 text-sm font-bold text-slate-900">R$ {i.sellPrice.toFixed(2)}</td>
+                          <td className="p-6 text-sm text-slate-400 font-medium">{i.minStock} un</td>
+                          <td className="p-6 text-center">
+                            {isLow ? (
+                              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-[10px] font-black uppercase animate-pulse">
+                                <AlertTriangle size={12}/> Estoque Baixo
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-[10px] font-black uppercase">
+                                <CheckCircle size={12}/> Normal
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-6 text-right">
+                            <button onClick={(e) => handleDeleteInventoryItem(i.id, e)} className="p-2.5 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all">
+                              <Trash2 size={20}/>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'orders' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
               <table className="w-full text-left">
-                <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
                   <tr>
-                    <th className="p-4">Item</th>
-                    <th className="p-4">Quantidade</th>
-                    <th className="p-4">Venda (Un)</th>
-                    <th className="p-4">Status</th>
-                    <th className="p-4">Ações</th>
+                    <th className="p-6">Protocolo / Máquina</th>
+                    <th className="p-6">Cliente Responsável</th>
+                    <th className="p-6">Status Operacional</th>
+                    <th className="p-6 text-right">Ações</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
-                  {inventory.map(i => (
-                    <tr key={i.id} className="hover:bg-slate-50">
-                      <td className="p-4 font-medium">{i.name}</td>
-                      <td className="p-4">{i.quantity}</td>
-                      <td className="p-4">R$ {i.sellPrice.toFixed(2)}</td>
-                      <td className="p-4">
-                        {i.quantity <= i.minStock ? <span className="text-red-500 text-xs font-bold">REPOR</span> : <span className="text-green-500 text-xs font-bold">OK</span>}
+                <tbody className="divide-y divide-slate-100">
+                  {orders.length === 0 && <tr><td colSpan={4} className="p-20 text-center text-slate-400 font-medium italic">Nenhuma ordem de serviço registrada no momento.</td></tr>}
+                  {orders.map(o => (
+                    <tr key={o.id} onClick={() => setSelectedOrder(o)} className="hover:bg-red-50/20 cursor-pointer transition-colors group">
+                      <td className="p-6">
+                        <div className="font-black text-red-600 text-lg">#{o.id}</div>
+                        <div className="text-sm font-medium text-slate-500">{o.printerModel}</div>
                       </td>
-                      <td className="p-4">
-                        <button onClick={() => handleDeleteInventoryItem(i.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button>
+                      <td className="p-6">
+                        <div className="font-bold text-slate-900">{clients.find(c => c.id === o.clientId)?.name || 'Desconhecido'}</div>
+                        <div className="text-xs text-slate-400">Criada em {new Date(o.createdAt).toLocaleDateString()}</div>
+                      </td>
+                      <td className="p-6"><StatusBadge status={o.status}/></td>
+                      <td className="p-6 text-right">
+                        <div className="flex justify-end gap-3 items-center">
+                          <button onClick={(e) => handleDeleteOrder(o.id, e)} className="p-2.5 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100">
+                            <Trash2 size={20}/>
+                          </button>
+                          <div className="p-2 bg-slate-50 text-slate-400 group-hover:bg-red-600 group-hover:text-white rounded-xl transition-all">
+                            <ChevronRight size={20} />
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -364,274 +351,280 @@ export default function App() {
           )}
 
           {activeTab === 'clients' && (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 border-b flex justify-between items-center">
-                    <h2 className="text-xl font-bold">Gestão de Clientes</h2>
-                    <button onClick={() => setIsClientModalOpen(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2">
-                        <Plus size={18}/> Novo Cliente
-                    </button>
-                </div>
-                <table className="w-full text-left">
-                    <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-                        <tr>
-                            <th className="p-4">Nome</th>
-                            <th className="p-4">Contato</th>
-                            <th className="p-4">Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                        {clients.map(c => (
-                            <tr key={c.id} className="hover:bg-slate-50">
-                                <td className="p-4">
-                                    <div className="font-bold text-slate-800">{c.name}</div>
-                                    <div className="text-xs text-slate-400">{c.email}</div>
-                                </td>
-                                <td className="p-4 flex flex-col text-sm text-slate-600">
-                                    <span className="flex items-center gap-1"><Phone size={12}/> {c.phone}</span>
-                                </td>
-                                <td className="p-4">
-                                    <button onClick={() => handleDeleteClient(c.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                  <tr>
+                    <th className="p-6">Nome Completo</th>
+                    <th className="p-6">WhatsApp de Contato</th>
+                    <th className="p-6 text-right">Gestão</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {clients.map(c => (
+                    <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="p-6">
+                        <div className="font-black text-slate-900">{c.name}</div>
+                        <div className="text-xs text-slate-400 lowercase">{c.email || 'Email não informado'}</div>
+                      </td>
+                      <td className="p-6">
+                        <div className="flex items-center gap-2 font-bold text-slate-600">
+                          <MessageCircle size={14} className="text-green-500"/> {c.phone}
+                        </div>
+                      </td>
+                      <td className="p-6 text-right">
+                        <button onClick={(e) => handleDeleteClient(c.id, e)} className="p-2.5 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all">
+                          <Trash2 size={20}/>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       </main>
 
-      {/* MODALS (Simplified for clarity) */}
-      {isOrderModalOpen && <OrderModal clients={clients} onClose={() => setIsOrderModalOpen(false)} onSave={handleCreateOrder} />}
-      {isClientModalOpen && <ClientModal onClose={() => setIsClientModalOpen(false)} onSave={handleCreateClient} />}
-      {isInventoryModalOpen && <InventoryModal onClose={() => setIsInventoryModalOpen(false)} onSave={handleCreateInventoryItem} />}
-      
-      {/* OS DETAILS PANEL (WITH AUTO-AI MESSAGE) */}
+      {/* OS Details Panel (Drawer Style) */}
       {selectedOrder && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex justify-end">
-            <div className="w-full max-w-2xl bg-white h-full shadow-2xl overflow-y-auto p-8 animate-slide-in-right">
-                <div className="flex justify-between items-center mb-8">
-                    <div>
-                        <h2 className="text-2xl font-bold text-slate-800">{selectedOrder.id}</h2>
-                        <p className="text-slate-500">{clients.find(c => c.id === selectedOrder.clientId)?.name} - {selectedOrder.printerModel}</p>
-                    </div>
-                    <button onClick={() => {setSelectedOrder(null); setAiMessage('');}} className="p-2 hover:bg-slate-100 rounded-full"><X/></button>
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-end">
+          <div className="w-full max-w-2xl bg-white h-full shadow-2xl overflow-y-auto animate-slide-in-right flex flex-col">
+            <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-4">
+                <div className="bg-red-100 p-3 rounded-2xl">
+                  <Printer size={28} className="text-red-600" />
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                    <div className="bg-slate-50 p-4 rounded-xl">
-                        <p className="text-xs font-bold text-slate-400 uppercase mb-2">Alterar Status</p>
-                        <div className="flex flex-wrap gap-2">
-                            {Object.values(OrderStatus).map(s => (
-                                <button 
-                                    key={s} 
-                                    onClick={() => handleUpdateStatus(selectedOrder.id, s)}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedOrder.status === s ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200 hover:border-blue-300'}`}
-                                >
-                                    {s}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-                        <div className="flex items-center gap-2 mb-2 text-blue-700 font-bold text-sm">
-                            <BrainCircuit size={16}/> Smart Assistant
-                        </div>
-                        <button 
-                            disabled={isAiLoading}
-                            onClick={async () => {
-                                setIsAiLoading(true);
-                                const diag = await getPrinterDiagnosis(selectedOrder.printerModel, selectedOrder.problemDescription);
-                                setAiDiagnosis(diag);
-                                setIsAiLoading(false);
-                            }}
-                            className="w-full bg-blue-600 text-white py-2 rounded-lg text-xs font-bold hover:bg-blue-700 disabled:opacity-50"
-                        >
-                            {isAiLoading ? 'Analisando...' : 'Gerar Diagnóstico Técnico'}
-                        </button>
-                    </div>
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">OS #{selectedOrder.id}</h2>
+                  <p className="text-slate-500 font-medium">{selectedOrder.printerModel}</p>
                 </div>
-
-                {/* AI MESSAGE SECTION (AUTO-TRIGGERED ON READY/DELIVERED) */}
-                {(aiMessage || isAiLoading) && (
-                    <div className="mb-8 p-6 bg-green-50 border border-green-100 rounded-2xl animate-fade-in">
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-2 text-green-700 font-bold">
-                                <MessageCircle size={20}/> Mensagem para WhatsApp
-                            </div>
-                            <button 
-                                onClick={() => {navigator.clipboard.writeText(aiMessage); alert('Copiado!');}}
-                                className="flex items-center gap-1 text-xs bg-white text-green-700 px-3 py-1.5 rounded-lg shadow-sm hover:shadow-md border border-green-200"
-                            >
-                                <Copy size={14}/> Copiar
-                            </button>
-                        </div>
-                        {isAiLoading ? (
-                            <div className="h-20 flex items-center justify-center">
-                                <div className="animate-pulse text-green-600 text-sm font-medium">IA redigindo mensagem profissional...</div>
-                            </div>
-                        ) : (
-                            <p className="text-sm text-green-800 whitespace-pre-wrap italic">"{aiMessage}"</p>
-                        )}
-                        <div className="mt-4 flex gap-2">
-                             <a 
-                                href={`https://wa.me/${clients.find(c => c.id === selectedOrder.clientId)?.phone.replace(/\D/g,'')}`} 
-                                target="_blank"
-                                className="flex-1 bg-green-600 text-white text-center py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-green-700"
-                             >
-                                <ExternalLink size={16}/> Enviar via WhatsApp
-                             </a>
-                        </div>
-                    </div>
-                )}
-
-                {aiDiagnosis && (
-                    <div className="mb-8 bg-slate-900 text-slate-100 p-6 rounded-2xl">
-                        <div className="flex items-center gap-2 mb-4 text-blue-400 font-bold">
-                            <BrainCircuit size={18}/> Diagnóstico Técnico (IA)
-                        </div>
-                        <div className="text-sm prose prose-invert max-w-none">
-                            <pre className="whitespace-pre-wrap font-sans text-xs opacity-90">{aiDiagnosis}</pre>
-                        </div>
-                    </div>
-                )}
-
-                <div className="border border-slate-100 rounded-xl">
-                    <div className="p-4 bg-slate-50 border-b font-bold text-sm flex items-center gap-2">
-                        <History size={16}/> Histórico da Máquina
-                    </div>
-                    <div className="p-4 space-y-4">
-                        {selectedOrder.history.map((h, i) => (
-                            <div key={i} className="flex gap-3 text-sm">
-                                <div className="w-1 h-12 bg-slate-200 rounded-full shrink-0"/>
-                                <div>
-                                    <div className="font-bold text-slate-700"><StatusBadge status={h.status}/></div>
-                                    <div className="text-xs text-slate-400">{h.date.toLocaleString()} - {h.user}</div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+              </div>
+              <button onClick={() => { setSelectedOrder(null); setAiMessage(''); }} className="p-3 hover:bg-slate-100 rounded-full transition-colors text-slate-400"><X size={24}/></button>
             </div>
+
+            <div className="p-8 space-y-8 flex-1">
+              {/* Status Update Section */}
+              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Fluxo de Trabalho</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.values(OrderStatus).map(s => (
+                    <button 
+                      key={s} 
+                      onClick={() => handleUpdateStatus(selectedOrder.id, s)}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-black border transition-all ${selectedOrder.status === s ? 'bg-red-600 text-white border-red-600 shadow-lg shadow-red-100 scale-105' : 'bg-white text-slate-600 border-slate-200 hover:border-red-300 active:scale-95'}`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI Auto Notification Section */}
+              {(aiMessage || isAiLoading) && (
+                <div className="p-6 bg-red-50 border border-red-100 rounded-3xl animate-fade-in shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-10">
+                    <MessageCircle size={80} className="text-red-600" />
+                  </div>
+                  <div className="flex items-center justify-between mb-4 relative z-10">
+                    <div className="flex items-center gap-2 text-red-700 font-black text-sm uppercase tracking-wider"><BrainCircuit size={18}/> Notificação Automática IA</div>
+                    <button onClick={() => { navigator.clipboard.writeText(aiMessage); alert('Copiado para área de transferência!'); }} className="text-[10px] font-black bg-white text-red-700 px-3 py-2 rounded-xl border border-red-200 hover:shadow-md flex items-center gap-1.5 transition-all"><Copy size={12}/> Copiar Texto</button>
+                  </div>
+                  {isAiLoading ? (
+                    <div className="flex items-center gap-3 text-red-600 text-xs py-4 font-bold uppercase tracking-widest"><div className="w-2 h-2 bg-red-600 rounded-full animate-ping"></div> Processando mensagem profissional...</div>
+                  ) : (
+                    <div className="relative z-10">
+                      <div className="bg-white/60 p-4 rounded-2xl mb-4 border border-red-100 shadow-inner">
+                        <p className="text-sm text-red-900 italic leading-relaxed whitespace-pre-wrap font-medium">"{aiMessage}"</p>
+                      </div>
+                      <a 
+                        href={`https://wa.me/${clients.find(c => c.id === selectedOrder.clientId)?.phone.replace(/\D/g,'')}`} 
+                        target="_blank"
+                        className="w-full bg-red-600 text-white py-4 rounded-2xl text-sm font-black flex items-center justify-center gap-2 hover:bg-red-700 transition-all shadow-xl shadow-red-100"
+                      >
+                        <ExternalLink size={18}/> Enviar via WhatsApp Business
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* History Timeline */}
+              <div className="border border-slate-100 rounded-3xl overflow-hidden shadow-sm">
+                <div className="p-5 bg-slate-50 border-b font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-slate-500"><History size={14}/> Linha do Tempo da Ordem</div>
+                <div className="p-8 space-y-6">
+                  {selectedOrder.history.map((h, i) => (
+                    <div key={i} className="flex gap-6 group">
+                      <div className="flex flex-col items-center">
+                        <div className="w-3 h-3 rounded-full bg-red-600 shadow-md shadow-red-100 z-10"></div>
+                        {i !== selectedOrder.history.length - 1 && <div className="w-px flex-1 bg-slate-200 my-1"></div>}
+                      </div>
+                      <div className="pb-6">
+                        <div className="font-black text-xs mb-1"><StatusBadge status={h.status}/></div>
+                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{new Date(h.date).toLocaleString()} • Responsável: {h.user}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
+
+      {/* SaaS Styled Modals */}
+      <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Abertura de Protocolo">
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          const formData = new FormData(e.currentTarget);
+          const newOrder: ServiceOrder = {
+            id: `OS-${Math.floor(1000 + Math.random() * 9000)}`,
+            clientId: formData.get('clientId') as string,
+            printerModel: formData.get('printerModel') as string,
+            serialNumber: formData.get('serialNumber') as string,
+            problemDescription: formData.get('problemDescription') as string,
+            status: OrderStatus.PENDING,
+            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Técnico Admin' }],
+            priority: formData.get('priority') as any,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            totalCost: 0
+          };
+          setOrders(prev => [newOrder, ...prev]);
+          setIsOrderModalOpen(false);
+        }} className="space-y-6">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Cliente Solicitante</label>
+            <select name="clientId" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-red-100 focus:border-red-600 outline-none font-bold transition-all" required>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Equipamento</label>
+              <input name="printerModel" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Modelo" required />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nível de Prioridade</label>
+              <select name="priority" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
+                <option value="Normal">Normal</option>
+                <option value="Alta">Alta 🔥</option>
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Descrição Técnica do Defeito</label>
+            <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold resize-none" placeholder="Relato do problema..." required />
+          </div>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all active:scale-95 uppercase tracking-widest">Registrar Ordem de Serviço</button>
+        </form>
+      </SaaSModal>
+
+      <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Cadastro de Cliente">
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          const formData = new FormData(e.currentTarget);
+          setClients(prev => [...prev, {
+            id: Date.now().toString(),
+            name: formData.get('name') as string,
+            phone: formData.get('phone') as string,
+            email: formData.get('email') as string,
+          }]);
+          setIsClientModalOpen(false);
+        }} className="space-y-6">
+          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo / Empresa" required />
+          <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp" required />
+          <input name="email" type="email" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="E-mail (Opcional)" />
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Salvar Cliente</button>
+        </form>
+      </SaaSModal>
+
+      <SaaSModal isOpen={isInventoryModalOpen} onClose={() => setIsInventoryModalOpen(false)} title="Nova Peça em Estoque">
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          const formData = new FormData(e.currentTarget);
+          setInventory(prev => [...prev, {
+            id: Date.now().toString(),
+            name: formData.get('name') as string,
+            quantity: parseInt(formData.get('quantity') as string),
+            minStock: parseInt(formData.get('minStock') as string),
+            costPrice: parseFloat(formData.get('costPrice') as string),
+            sellPrice: parseFloat(formData.get('sellPrice') as string),
+          }]);
+          setIsInventoryModalOpen(false);
+        }} className="space-y-6">
+          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome do Item" required />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Quantidade</label>
+               <input name="quantity" type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd" required />
+            </div>
+            <div className="space-y-1.5">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Estoque Mín.</label>
+               <input name="minStock" type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Mín." required />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Preço Custo</label>
+               <input name="costPrice" type="number" step="0.01" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="R$" required />
+            </div>
+            <div className="space-y-1.5">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Preço Venda</label>
+               <input name="sellPrice" type="number" step="0.01" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="R$" required />
+            </div>
+          </div>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Adicionar ao Estoque</button>
+        </form>
+      </SaaSModal>
     </div>
   );
 }
 
-// --- SUB-COMPONENTS ---
-
-function StatCard({title, value, icon, color}: any) {
-    return (
-        <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm transition-transform hover:-translate-y-1">
-            <div className="flex justify-between items-center mb-2">
-                <span className="text-slate-500 text-sm font-medium">{title}</span>
-                <span className={`p-2 rounded-lg ${color}`}>{icon}</span>
-            </div>
-            <p className="text-2xl font-bold text-slate-900">{value}</p>
-        </div>
-    );
-}
+// Sub-componentes Refinados
 
 function NavButton({icon, label, active, onClick}: any) {
-    return (
-        <button 
-            onClick={onClick}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${active ? 'bg-blue-50 text-blue-700 font-bold' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}
-        >
-            {icon} {label}
-        </button>
-    );
+  return (
+    <button 
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all ${active ? 'bg-red-600 text-white font-black shadow-lg shadow-red-100' : 'text-slate-500 hover:bg-red-50 hover:text-red-600 font-bold'}`}
+    >
+      <span className={active ? 'text-white' : ''}>{icon}</span>
+      <span className="text-sm tracking-tight">{label}</span>
+    </button>
+  );
 }
 
-function OrderModal({clients, onClose, onSave}: any) {
-    return (
-        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl">
-                <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-                    <h3 className="text-xl font-bold">Nova Ordem de Serviço</h3>
-                    <button onClick={onClose}><X/></button>
-                </div>
-                <form onSubmit={onSave} className="p-6 space-y-4">
-                    <div>
-                        <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Cliente</label>
-                        <select name="clientId" className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" required>
-                            {clients.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Modelo Impressora</label>
-                            <input name="printerModel" type="text" className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Ex: Epson L3250" required />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Número de Série</label>
-                            <input name="serialNumber" type="text" className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Opcional" />
-                        </div>
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Defeito Relatado</label>
-                        <textarea name="problemDescription" rows={3} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Descreva o que está acontecendo..." required />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Prioridade</label>
-                        <select name="priority" className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
-                            <option value="Normal">Normal</option>
-                            <option value="Alta">Alta</option>
-                            <option value="Baixa">Baixa</option>
-                        </select>
-                    </div>
-                    <div className="pt-4 flex gap-3">
-                        <button type="button" onClick={onClose} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl">Cancelar</button>
-                        <button type="submit" className="flex-[2] py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 hover:bg-blue-700">Abrir Ordem de Serviço</button>
-                    </div>
-                </form>
-            </div>
+function DashboardStat({label, value, icon, trend, critical}: any) {
+  return (
+    <div className={`bg-white p-7 rounded-[32px] border border-slate-200 shadow-sm transition-all hover:-translate-y-1 group ${critical ? 'border-red-200 bg-red-50/20' : ''}`}>
+      <div className="flex justify-between items-start mb-6">
+        <div className={`p-4 rounded-2xl transition-colors ${critical ? 'bg-red-100' : 'bg-slate-50 group-hover:bg-red-600/10'}`}>
+          {icon}
         </div>
-    );
+        <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg ${critical ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{trend}</span>
+      </div>
+      <div>
+        <h2 className="text-3xl font-black text-slate-900 tracking-tight mb-1">{value}</h2>
+        <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{label}</p>
+      </div>
+    </div>
+  );
 }
 
-function ClientModal({onClose, onSave}: any) {
-    return (
-        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
-                <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-                    <h3 className="text-xl font-bold text-slate-800">Novo Cliente</h3>
-                    <button onClick={onClose}><X/></button>
-                </div>
-                <form onSubmit={onSave} className="p-6 space-y-4">
-                    <input name="name" type="text" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Nome / Razão Social" required />
-                    <input name="phone" type="text" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="WhatsApp (DDD) 9..." required />
-                    <input name="email" type="email" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Email (Opcional)" />
-                    <button type="submit" className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 mt-2">Salvar Cliente</button>
-                </form>
-            </div>
+function SaaSModal({isOpen, onClose, title, children}: any) {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white w-full max-w-lg rounded-[40px] overflow-hidden shadow-2xl">
+        <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <h3 className="text-xl font-black text-slate-900 tracking-tight">{title}</h3>
+          <button onClick={onClose} className="p-2 hover:bg-white rounded-full transition-all text-slate-400"><X size={20}/></button>
         </div>
-    );
-}
-
-function InventoryModal({onClose, onSave}: any) {
-    return (
-        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
-                <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-                    <h3 className="text-xl font-bold text-slate-800">Adicionar Peça</h3>
-                    <button onClick={onClose}><X/></button>
-                </div>
-                <form onSubmit={onSave} className="p-6 space-y-4">
-                    <input name="name" type="text" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Nome da Peça" required />
-                    <div className="grid grid-cols-2 gap-4">
-                        <input name="quantity" type="number" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Qtd. Inicial" required />
-                        <input name="minStock" type="number" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Estoque Mín." required />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <input name="costPrice" type="number" step="0.01" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Preço Custo" required />
-                        <input name="sellPrice" type="number" step="0.01" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl" placeholder="Preço Venda" required />
-                    </div>
-                    <button type="submit" className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 mt-2">Cadastrar no Estoque</button>
-                </form>
-            </div>
+        <div className="p-10">
+          {children}
         </div>
-    );
+      </div>
+    </div>
+  );
 }
