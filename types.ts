@@ -23,6 +23,13 @@ export interface InventoryItem {
   minStock: number;
 }
 
+export interface UsedPart {
+  inventoryItemId: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+}
+
 export interface StatusHistoryEntry {
   status: OrderStatus;
   date: Date;
@@ -40,7 +47,10 @@ export interface ServiceOrder {
   history: StatusHistoryEntry[];
   createdAt: Date;
   updatedAt: Date;
+  laborCost: number;
+  partsCost: number;
   totalCost: number;
+  partsUsed: UsedPart[];
   technicalNotes?: string;
   priority: 'Baixa' | 'Normal' | 'Alta';
 }

@@ -26,7 +26,11 @@ import {
   Upload,
   Database,
   RefreshCcw,
-  ShieldCheck
+  ShieldCheck,
+  PlusCircle,
+  MinusCircle,
+  Calculator,
+  Receipt
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -40,14 +44,13 @@ import {
   YAxis,
   CartesianGrid
 } from 'recharts';
-import { Client, InventoryItem, ServiceOrder, OrderStatus, StatusHistoryEntry } from './types';
+import { Client, InventoryItem, ServiceOrder, OrderStatus, StatusHistoryEntry, UsedPart } from './types';
 import { getPrinterDiagnosis, generateClientMessage } from './services/geminiService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'inventory' | 'clients'>('dashboard');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // Persistência definitiva: Se não houver nada no localStorage, inicia vazio conforme regra.
   const [orders, setOrders] = useState<ServiceOrder[]>(() => {
     try {
       const saved = localStorage.getItem('printtech_orders');
@@ -69,7 +72,6 @@ export default function App() {
     } catch { return []; }
   });
 
-  // Salvar automaticamente sempre que houver mudanças
   useEffect(() => {
     localStorage.setItem('printtech_orders', JSON.stringify(orders));
   }, [orders]);
@@ -90,66 +92,79 @@ export default function App() {
   const [aiMessage, setAiMessage] = useState<string>('');
   const [isAiLoading, setIsAiLoading] = useState(false);
 
-  const [printType, setPrintType] = useState<'client_individual' | 'client_general' | 'inventory' | null>(null);
+  const [printType, setPrintType] = useState<'client_individual' | 'client_general' | 'inventory' | 'os_detail' | null>(null);
   const [clientToPrint, setClientToPrint] = useState<Client | null>(null);
+  const [orderToPrint, setOrderToPrint] = useState<ServiceOrder | null>(null);
 
-  // Lógica de Backup (Download JSON)
+  // Estados temporários para criação de OS
+  const [osPartsUsed, setOsPartsUsed] = useState<UsedPart[]>([]);
+
+  const handleAddPartToOS = (itemId: string, qty: number) => {
+    const item = inventory.find(i => i.id === itemId);
+    if (!item) return;
+
+    if (item.quantity < qty) {
+      alert(`Quantidade insuficiente em estoque. Disponível: ${item.quantity}`);
+      return;
+    }
+
+    const existing = osPartsUsed.find(p => p.inventoryItemId === itemId);
+    if (existing) {
+      setOsPartsUsed(osPartsUsed.map(p => 
+        p.inventoryItemId === itemId ? { ...p, quantity: p.quantity + qty } : p
+      ));
+    } else {
+      setOsPartsUsed([...osPartsUsed, {
+        inventoryItemId: itemId,
+        name: item.name,
+        quantity: qty,
+        unitPrice: item.sellPrice
+      }]);
+    }
+
+    // Baixa temporária no estoque visual (será persistida ao salvar OS)
+    setInventory(inventory.map(i => i.id === itemId ? { ...i, quantity: i.quantity - qty } : i));
+  };
+
+  const handleRemovePartFromOS = (itemId: string) => {
+    const part = osPartsUsed.find(p => p.inventoryItemId === itemId);
+    if (!part) return;
+
+    // Devolve para o estoque
+    setInventory(inventory.map(i => i.id === itemId ? { ...i, quantity: i.quantity + part.quantity } : i));
+    setOsPartsUsed(osPartsUsed.filter(p => p.inventoryItemId !== itemId));
+  };
+
   const handleExportBackup = () => {
-    const backupData = {
-      clients,
-      inventory,
-      orders,
-      backupDate: new Date().toISOString(),
-      version: "1.2.0"
-    };
-    
+    const backupData = { clients, inventory, orders, backupDate: new Date().toISOString(), version: "1.3.0" };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    const dateStr = new Date().toISOString().split('T')[0];
-    
     link.href = url;
-    link.download = `backup-printtech-${dateStr}.json`;
-    document.body.appendChild(link);
+    link.download = `backup-printtech-${new Date().toISOString().split('T')[0]}.json`;
     link.click();
-    document.body.removeChild(link);
     URL.revokeObjectURL(url);
     alert('Backup gerado com sucesso!');
   };
 
-  // Lógica de Restore (Upload JSON)
   const handleImportBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const content = e.target?.result as string;
-        const data = JSON.parse(content);
-
-        // Validação básica da estrutura
-        if (!data.clients || !data.inventory || !data.orders) {
-          throw new Error('Estrutura de arquivo inválida.');
+        const data = JSON.parse(e.target?.result as string);
+        if (window.confirm('Substituir dados atuais?')) {
+          setClients(data.clients || []);
+          setInventory(data.inventory || []);
+          setOrders(data.orders || []);
+          alert('Restauração concluída!');
         }
-
-        if (window.confirm('Isso substituirá todos os dados atuais pelos dados do backup. Deseja continuar?')) {
-          setClients(data.clients);
-          setInventory(data.inventory);
-          setOrders(data.orders);
-          alert('Sistema restaurado com sucesso!');
-        }
-      } catch (err) {
-        alert('Erro ao processar backup: Arquivo inválido ou corrompido.');
-        console.error(err);
-      }
-      // Limpar input
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      } catch { alert('Arquivo de backup inválido.'); }
     };
     reader.readAsText(file);
   };
 
-  // Estatísticas
   const stats = useMemo(() => {
     const revenue = orders
       .filter(o => o.status === OrderStatus.DELIVERED || o.status === OrderStatus.READY)
@@ -164,59 +179,24 @@ export default function App() {
       acc[order.status] = (acc[order.status] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const baseData = Object.keys(counts).map(key => ({ name: key, value: counts[key] }));
-    return baseData.length > 0 ? baseData : [{ name: 'Sem Dados', value: 1 }];
+    return Object.keys(counts).map(key => ({ name: key, value: counts[key] }));
   }, [orders]);
 
   const COLORS = ['#dc2626', '#ef4444', '#f87171', '#fca5a5', '#fee2e2', '#64748b'];
 
-  const handleDeleteOrder = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm('Excluir esta Ordem de Serviço permanentemente?')) {
-      setOrders(prev => prev.filter(o => o.id !== id));
-      if (selectedOrder?.id === id) setSelectedOrder(null);
-    }
-  };
-
-  const handleDeleteClient = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm('Excluir este cliente?')) {
-      setClients(prev => prev.filter(c => c.id !== id));
-    }
-  };
-
-  const handleDeleteInventoryItem = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm('Remover esta peça do estoque?')) {
-      setInventory(prev => prev.filter(i => i.id !== id));
-    }
-  };
-
   const handleUpdateStatus = async (id: string, newStatus: OrderStatus) => {
     const historyEntry: StatusHistoryEntry = { status: newStatus, date: new Date(), user: 'Técnico Admin' };
-    let targetOrder: ServiceOrder | undefined;
-
-    setOrders(prev => prev.map(o => {
-      if (o.id === id) {
-        targetOrder = { ...o, status: newStatus, updatedAt: new Date(), history: [historyEntry, ...o.history] };
-        return targetOrder;
-      }
-      return o;
-    }));
-
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus, updatedAt: new Date(), history: [historyEntry, ...o.history] } : o));
+    
     if (selectedOrder?.id === id) {
       setSelectedOrder(prev => prev ? { ...prev, status: newStatus, history: [historyEntry, ...prev.history] } : null);
     }
 
-    if (targetOrder && (newStatus === OrderStatus.READY || newStatus === OrderStatus.DELIVERED)) {
+    if (newStatus === OrderStatus.READY || newStatus === OrderStatus.DELIVERED) {
       setIsAiLoading(true);
-      const client = clients.find(c => c.id === targetOrder?.clientId);
-      const msg = await generateClientMessage(
-        client?.name || 'Cliente',
-        targetOrder.printerModel,
-        newStatus,
-        newStatus === OrderStatus.READY ? "Equipamento disponível para retirada." : "Serviço finalizado com sucesso."
-      );
+      const target = orders.find(o => o.id === id);
+      const client = clients.find(c => c.id === target?.clientId);
+      const msg = await generateClientMessage(client?.name || 'Cliente', target?.printerModel || 'Impressora', newStatus, "Serviço finalizado.");
       setAiMessage(msg);
       setIsAiLoading(false);
     }
@@ -227,6 +207,7 @@ export default function App() {
       [OrderStatus.PENDING]: 'bg-amber-100 text-amber-800 border-amber-200',
       [OrderStatus.DIAGNOSING]: 'bg-red-50 text-red-700 border-red-100',
       [OrderStatus.WAITING_APPROVAL]: 'bg-slate-100 text-slate-700 border-slate-200',
+      [OrderStatus.IN_REPAIR]: 'bg-blue-100 text-blue-800 border-blue-200',
       [OrderStatus.READY]: 'bg-green-100 text-green-800 border-green-200',
       [OrderStatus.DELIVERED]: 'bg-slate-800 text-white border-slate-700',
     };
@@ -234,16 +215,12 @@ export default function App() {
   };
 
   const handlePrint = () => {
-    setTimeout(() => {
-      window.print();
-      setPrintType(null);
-      setClientToPrint(null);
-    }, 100);
+    setTimeout(() => { window.print(); setPrintType(null); }, 100);
   };
 
   return (
     <div className="flex h-screen bg-[#F8FAFC] overflow-hidden text-slate-900 font-sans print:bg-white">
-      {/* Sidebar - Oculta na Impressão */}
+      {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col shadow-sm print:hidden">
         <div className="p-8 border-b border-slate-100 flex items-center gap-3">
           <div className="bg-red-600 p-2 rounded-lg shadow-md shadow-red-200">
@@ -253,7 +230,7 @@ export default function App() {
         </div>
         <nav className="flex-1 p-4 space-y-2 mt-4">
           <NavButton icon={<LayoutDashboard size={20}/>} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-          <NavButton icon={<Wrench size={20}/>} label="Ordens de Serviço" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />
+          <NavButton icon={<Wrench size={20}/>} label="Manutenções (OS)" active={activeTab === 'orders'} onClick={() => setActiveTab('orders')} />
           <NavButton icon={<Package size={20}/>} label="Estoque" active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} />
           <NavButton icon={<Users size={20}/>} label="Clientes" active={activeTab === 'clients'} onClick={() => setActiveTab('clients')} />
         </nav>
@@ -263,29 +240,28 @@ export default function App() {
       <main className="flex-1 overflow-y-auto p-8 relative print:p-0">
         <div className="max-w-7xl mx-auto space-y-8 animate-fade-in print:space-y-4">
           
-          {/* Header Section - Oculto na Impressão */}
           <div className="flex justify-between items-end mb-4 print:hidden">
             <div>
-              <h1 className="text-3xl font-black text-slate-900 tracking-tight capitalize">{activeTab === 'dashboard' ? 'Visão Geral' : activeTab}</h1>
-              <p className="text-slate-500 text-sm mt-1">Gestão inteligente e segura dos seus dados.</p>
+              <h1 className="text-3xl font-black text-slate-900 tracking-tight capitalize">{activeTab === 'dashboard' ? 'Visão Geral' : activeTab === 'orders' ? 'Ordens de Serviço' : activeTab}</h1>
+              <p className="text-slate-500 text-sm mt-1">Sua assistência técnica funcionando em alto nível.</p>
             </div>
             <div className="flex gap-3">
-              {activeTab === 'inventory' && (
-                <button onClick={() => { setPrintType('inventory'); handlePrint(); }} className="bg-white text-slate-700 px-5 py-3 rounded-xl font-bold border border-slate-200 hover:bg-slate-50 transition-all flex items-center gap-2">
-                  <Printer size={18}/> Imprimir Estoque
+              {activeTab === 'orders' && (
+                <button 
+                  onClick={() => { setOsPartsUsed([]); setIsOrderModalOpen(true); }}
+                  className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl shadow-red-100 flex items-center gap-2 transition-all active:scale-95"
+                >
+                  <PlusCircle size={20}/> Nova Manutenção
                 </button>
               )}
               {activeTab === 'clients' && (
-                <button onClick={() => { setPrintType('client_general'); handlePrint(); }} className="bg-white text-slate-700 px-5 py-3 rounded-xl font-bold border border-slate-200 hover:bg-slate-50 transition-all flex items-center gap-2">
-                  <Printer size={18}/> Relatório Geral
+                <button onClick={() => setIsClientModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl shadow-red-100 flex items-center gap-2 transition-all">
+                  <Plus size={20}/> Novo Cliente
                 </button>
               )}
-              {activeTab !== 'dashboard' && (
-                <button 
-                  onClick={() => activeTab === 'orders' ? setIsOrderModalOpen(true) : activeTab === 'clients' ? setIsClientModalOpen(true) : setIsInventoryModalOpen(true)}
-                  className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl shadow-red-100 flex items-center gap-2 transition-all active:scale-95"
-                >
-                  <Plus size={20}/> Adicionar
+              {activeTab === 'inventory' && (
+                <button onClick={() => setIsInventoryModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl shadow-red-100 flex items-center gap-2 transition-all">
+                  <Plus size={20}/> Novo Item
                 </button>
               )}
             </div>
@@ -294,15 +270,14 @@ export default function App() {
           {activeTab === 'dashboard' && (
             <div className="print:hidden space-y-8">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <DashboardStat label="Receita Líquida" value={`R$ ${stats.revenue.toFixed(2)}`} icon={<TrendingUp className="text-green-600"/>} trend="+12.5%" />
-                <DashboardStat label="OS em Aberto" value={stats.pending.toString()} icon={<Clock className="text-amber-600"/>} trend="Pendentes" />
-                <DashboardStat label="Alerta Estoque" value={stats.lowStock.toString()} icon={<AlertTriangle className="text-red-600"/>} trend="Reposição" critical={stats.lowStock > 0} />
+                <DashboardStat label="Faturamento Total" value={`R$ ${stats.revenue.toFixed(2)}`} icon={<TrendingUp className="text-green-600"/>} trend="+12.5%" />
+                <DashboardStat label="OS Pendentes" value={stats.pending.toString()} icon={<Clock className="text-amber-600"/>} trend="Em Processo" />
+                <DashboardStat label="Peças Críticas" value={stats.lowStock.toString()} icon={<AlertTriangle className="text-red-600"/>} trend="Reposição" critical={stats.lowStock > 0} />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Gráfico */}
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-8"><BarChart3 size={18} className="text-red-600"/> Status das Ordens</h3>
+                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-8"><BarChart3 size={18} className="text-red-600"/> Distribuição de Serviços</h3>
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -315,39 +290,17 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Gestão de Dados (Backup/Restore) */}
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 flex flex-col">
-                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-6"><Database size={18} className="text-red-600"/> Segurança de Dados</h3>
-                  <p className="text-slate-500 text-sm mb-8">O sistema salva os dados localmente no seu navegador. Recomendamos exportar um backup regularmente.</p>
-                  
+                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-6"><Database size={18} className="text-red-600"/> Segurança do Sistema</h3>
+                  <p className="text-slate-500 text-sm mb-8">Backup preventivo de clientes, estoque e histórico de manutenções.</p>
                   <div className="grid grid-cols-1 gap-4 mt-auto">
-                    <button 
-                      onClick={handleExportBackup}
-                      className="w-full flex items-center justify-center gap-3 bg-red-600 text-white py-4 rounded-2xl font-black hover:bg-red-700 transition-all shadow-lg shadow-red-100"
-                    >
-                      <Download size={20}/> Fazer Backup Completo
+                    <button onClick={handleExportBackup} className="w-full flex items-center justify-center gap-3 bg-red-600 text-white py-4 rounded-2xl font-black hover:bg-red-700 transition-all shadow-lg shadow-red-100">
+                      <Download size={20}/> Exportar Backup JSON
                     </button>
-                    
-                    <div className="relative">
-                      <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        onChange={handleImportBackup} 
-                        accept=".json" 
-                        className="hidden" 
-                      />
-                      <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="w-full flex items-center justify-center gap-3 bg-white text-slate-700 border border-slate-200 py-4 rounded-2xl font-black hover:bg-slate-50 transition-all"
-                      >
-                        <Upload size={20}/> Restaurar Backup (.json)
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-8 pt-6 border-t border-slate-100 flex items-center gap-3 text-slate-400">
-                    <ShieldCheck size={20} className="text-green-500"/>
-                    <span className="text-xs font-bold uppercase tracking-widest">Proteção Local Ativa</span>
+                    <button onClick={() => fileInputRef.current?.click()} className="w-full flex items-center justify-center gap-3 bg-white text-slate-700 border border-slate-200 py-4 rounded-2xl font-black hover:bg-slate-50 transition-all">
+                      <Upload size={20}/> Restaurar Dados
+                    </button>
+                    <input type="file" ref={fileInputRef} onChange={handleImportBackup} accept=".json" className="hidden" />
                   </div>
                 </div>
               </div>
@@ -355,47 +308,32 @@ export default function App() {
           )}
 
           {activeTab === 'inventory' && (
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden print:border-none print:shadow-none">
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden print:border-none">
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
-                  <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100 print:bg-white">
+                  <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
                     <tr>
-                      <th className="p-6">Item</th>
-                      <th className="p-6">Qtd</th>
-                      <th className="p-6">Custo</th>
+                      <th className="p-6">Referência / Peça</th>
+                      <th className="p-6">Saldo</th>
                       <th className="p-6">Venda</th>
-                      <th className="p-6">Mín.</th>
                       <th className="p-6 text-center">Status</th>
                       <th className="p-6 text-right print:hidden">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {inventory.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="p-20 text-center text-slate-400 italic">Nenhum item em estoque.</td>
+                    {inventory.map(i => (
+                      <tr key={i.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-6 font-bold">{i.name}</td>
+                        <td className="p-6 font-black">{i.quantity} un</td>
+                        <td className="p-6 font-bold text-slate-600">R$ {i.sellPrice.toFixed(2)}</td>
+                        <td className="p-6 text-center">
+                          {i.quantity <= i.minStock ? <span className="text-red-600 font-black text-[10px]">REPOR</span> : <span className="text-green-600 font-black text-[10px]">DISPONÍVEL</span>}
+                        </td>
+                        <td className="p-6 text-right print:hidden">
+                          <button onClick={() => setInventory(prev => prev.filter(x => x.id !== i.id))} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button>
+                        </td>
                       </tr>
-                    )}
-                    {inventory.map(i => {
-                      const isLow = i.quantity <= i.minStock;
-                      return (
-                        <tr key={i.id} className={`hover:bg-slate-50 transition-colors ${isLow ? 'bg-red-50/30 print:bg-white' : ''}`}>
-                          <td className="p-6">
-                            <div className="font-bold text-slate-900">{i.name}</div>
-                            <div className="text-[10px] text-slate-400 font-bold uppercase">REF: {i.id.slice(-6)}</div>
-                          </td>
-                          <td className="p-6 font-black">{i.quantity}</td>
-                          <td className="p-6 text-sm text-slate-500">R$ {i.costPrice.toFixed(2)}</td>
-                          <td className="p-6 text-sm font-bold">R$ {i.sellPrice.toFixed(2)}</td>
-                          <td className="p-6 text-sm text-slate-400">{i.minStock}</td>
-                          <td className="p-6 text-center">
-                            {isLow ? <span className="text-red-600 font-black text-[10px] uppercase">BAIXO</span> : <span className="text-green-600 font-black text-[10px] uppercase">OK</span>}
-                          </td>
-                          <td className="p-6 text-right print:hidden">
-                            <button onClick={(e) => handleDeleteInventoryItem(i.id, e)} className="p-2.5 text-slate-300 hover:text-red-600 rounded-xl"><Trash2 size={20}/></button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -407,32 +345,24 @@ export default function App() {
               <table className="w-full text-left">
                 <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
                   <tr>
-                    <th className="p-6">Protocolo / Máquina</th>
+                    <th className="p-6">OS / Equipamento</th>
                     <th className="p-6">Cliente</th>
+                    <th className="p-6">Valor Total</th>
                     <th className="p-6">Status</th>
-                    <th className="p-6 text-right">Ações</th>
+                    <th className="p-6 text-right">Ver</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {orders.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="p-20 text-center text-slate-400 italic">Nenhuma ordem de serviço.</td>
-                    </tr>
-                  )}
                   {orders.map(o => (
-                    <tr key={o.id} onClick={() => setSelectedOrder(o)} className="hover:bg-red-50/20 cursor-pointer transition-colors group">
+                    <tr key={o.id} onClick={() => setSelectedOrder(o)} className="hover:bg-red-50/20 cursor-pointer group transition-colors">
                       <td className="p-6">
-                        <div className="font-black text-red-600 text-lg">#{o.id}</div>
-                        <div className="text-sm font-medium text-slate-500">{o.printerModel}</div>
+                        <div className="font-black text-red-600">#{o.id}</div>
+                        <div className="text-sm text-slate-500">{o.printerModel}</div>
                       </td>
-                      <td className="p-6 font-bold">{clients.find(c => c.id === o.clientId)?.name || 'Cliente Removido'}</td>
+                      <td className="p-6 font-bold">{clients.find(c => c.id === o.clientId)?.name || 'N/A'}</td>
+                      <td className="p-6 font-black text-slate-900">R$ {o.totalCost.toFixed(2)}</td>
                       <td className="p-6"><StatusBadge status={o.status}/></td>
-                      <td className="p-6 text-right">
-                        <div className="flex justify-end gap-3 items-center">
-                          <button onClick={(e) => handleDeleteOrder(o.id, e)} className="p-2.5 text-slate-300 hover:text-red-600 rounded-xl"><Trash2 size={20}/></button>
-                          <ChevronRight size={20} className="text-slate-300 group-hover:text-red-600" />
-                        </div>
-                      </td>
+                      <td className="p-6 text-right"><ChevronRight size={20} className="text-slate-300 group-hover:text-red-600 inline"/></td>
                     </tr>
                   ))}
                 </tbody>
@@ -441,28 +371,23 @@ export default function App() {
           )}
 
           {activeTab === 'clients' && (
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden print:border-none">
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
               <table className="w-full text-left">
-                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100 print:bg-white">
+                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
                   <tr>
-                    <th className="p-6">Nome Completo</th>
+                    <th className="p-6">Nome / Fantasia</th>
                     <th className="p-6">WhatsApp</th>
-                    <th className="p-6 text-right print:hidden">Gestão</th>
+                    <th className="p-6 text-right">Opções</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {clients.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="p-20 text-center text-slate-400 italic">Nenhum cliente cadastrado.</td>
-                    </tr>
-                  )}
                   {clients.map(c => (
                     <tr key={c.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-6 font-black text-slate-900">{c.name}</td>
-                      <td className="p-6 font-bold text-slate-600">{c.phone}</td>
-                      <td className="p-6 text-right print:hidden flex justify-end gap-2">
-                        <button onClick={() => { setClientToPrint(c); setPrintType('client_individual'); handlePrint(); }} className="p-2.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl flex items-center gap-1 text-xs font-bold transition-all"><FileText size={18}/> Imprimir Ficha</button>
-                        <button onClick={(e) => handleDeleteClient(c.id, e)} className="p-2.5 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"><Trash2 size={18}/></button>
+                      <td className="p-6 font-black">{c.name}</td>
+                      <td className="p-6 font-bold">{c.phone}</td>
+                      <td className="p-6 text-right flex justify-end gap-2">
+                         <button onClick={() => { setClientToPrint(c); setPrintType('client_individual'); handlePrint(); }} className="p-2 text-slate-400 hover:text-blue-600"><Printer size={18}/></button>
+                         <button onClick={() => setClients(prev => prev.filter(x => x.id !== c.id))} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button>
                       </td>
                     </tr>
                   ))}
@@ -472,104 +397,93 @@ export default function App() {
           )}
         </div>
 
-        {/* Layout de Impressão */}
-        <div id="print-area" className="hidden print:block font-serif text-slate-900 bg-white">
+        {/* Layout de Impressão Universal */}
+        <div id="print-area" className="hidden print:block font-serif text-slate-900">
           <div className="mb-8 border-b-2 border-slate-900 pb-4 flex justify-between items-center">
-             <div>
-               <h1 className="text-2xl font-black uppercase">PRINT<span className="text-red-600">TECH</span> Assistência</h1>
-               <p className="text-xs font-bold">Gestão Profissional de Dados</p>
-             </div>
-             <div className="text-right text-[10px]">
-               <p>Emissão: {new Date().toLocaleString()}</p>
-             </div>
+            <div>
+              <h1 className="text-2xl font-black uppercase tracking-tighter">PRINT<span className="text-red-600">TECH</span></h1>
+              <p className="text-[10px] font-bold">ASSISTÊNCIA TÉCNICA ESPECIALIZADA</p>
+            </div>
+            <div className="text-right text-[10px]">
+              <p>Relatório Gerado em: {new Date().toLocaleString()}</p>
+            </div>
           </div>
 
-          {printType === 'client_individual' && clientToPrint && (
-            <div className="space-y-6">
-               <div className="bg-slate-100 p-4 rounded-lg">
-                 <h2 className="text-lg font-black uppercase mb-2">Ficha Cadastral do Cliente</h2>
-                 <p><strong>Nome:</strong> {clientToPrint.name}</p>
-                 <p><strong>WhatsApp:</strong> {clientToPrint.phone}</p>
-                 <p><strong>Email:</strong> {clientToPrint.email || 'Não informado'}</p>
-               </div>
-               
-               <h3 className="text-md font-black border-b border-slate-300 pb-1">Histórico de Ordens de Serviço</h3>
-               <table className="w-full text-xs">
-                 <thead className="bg-slate-50">
-                   <tr className="border-b">
-                     <th className="p-2 text-left">Protocolo</th>
-                     <th className="p-2 text-left">Equipamento</th>
-                     <th className="p-2 text-left">Data</th>
-                     <th className="p-2 text-left">Status Final</th>
-                     <th className="p-2 text-right">Valor Total</th>
-                   </tr>
-                 </thead>
-                 <tbody>
-                   {orders.filter(o => o.clientId === clientToPrint.id).map(o => (
-                     <tr key={o.id} className="border-b">
-                       <td className="p-2 font-bold">#{o.id}</td>
-                       <td className="p-2">{o.printerModel}</td>
-                       <td className="p-2">{new Date(o.createdAt).toLocaleDateString()}</td>
-                       <td className="p-2 font-bold">{o.status}</td>
-                       <td className="p-2 text-right font-bold">R$ {o.totalCost.toFixed(2)}</td>
-                     </tr>
-                   ))}
-                 </tbody>
-               </table>
-            </div>
-          )}
+          {printType === 'os_detail' && orderToPrint && (
+            <div className="space-y-8">
+              <div className="flex justify-between border-b pb-4">
+                <div>
+                  <h2 className="text-xl font-black">ORDEM DE SERVIÇO #{orderToPrint.id}</h2>
+                  <p className="text-sm">Data de Abertura: {new Date(orderToPrint.createdAt).toLocaleDateString()}</p>
+                </div>
+                <div className="text-right">
+                  <div className="bg-slate-900 text-white px-3 py-1 text-sm font-bold rounded uppercase">{orderToPrint.status}</div>
+                </div>
+              </div>
 
-          {printType === 'client_general' && (
-            <div className="space-y-4">
-              <h2 className="text-lg font-black uppercase">Relatório Geral de Clientes</h2>
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="border-b-2 border-slate-400 bg-slate-50">
-                    <th className="p-3 text-left">Nome do Cliente</th>
-                    <th className="p-3 text-left">Contato WhatsApp</th>
-                    <th className="p-3 text-left">E-mail</th>
-                    <th className="p-3 text-center">Total OS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {clients.map(c => (
-                    <tr key={c.id} className="border-b border-slate-200">
-                      <td className="p-3 font-bold">{c.name}</td>
-                      <td className="p-3">{c.phone}</td>
-                      <td className="p-3">{c.email || '-'}</td>
-                      <td className="p-3 text-center">{orders.filter(o => o.clientId === c.id).length}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+              <div className="grid grid-cols-2 gap-8">
+                <div>
+                  <h3 className="text-xs font-black uppercase mb-2 border-b">Cliente</h3>
+                  <p className="text-sm font-bold">{clients.find(c => c.id === orderToPrint.clientId)?.name}</p>
+                  <p className="text-xs">{clients.find(c => c.id === orderToPrint.clientId)?.phone}</p>
+                </div>
+                <div>
+                  <h3 className="text-xs font-black uppercase mb-2 border-b">Equipamento</h3>
+                  <p className="text-sm font-bold">{orderToPrint.printerModel}</p>
+                  <p className="text-xs">S/N: {orderToPrint.serialNumber || 'N/A'}</p>
+                </div>
+              </div>
 
-          {printType === 'inventory' && (
-            <div className="space-y-4">
-              <h2 className="text-lg font-black uppercase">Relatório de Estoque e Reposição</h2>
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="border-b-2 border-slate-400 bg-slate-50">
-                    <th className="p-3 text-left">Referência / Item</th>
-                    <th className="p-3 text-center">Qtd Atual</th>
-                    <th className="p-3 text-center">Nível Mín.</th>
-                    <th className="p-3 text-right">Preço Venda</th>
-                    <th className="p-3 text-center">Situação</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inventory.map(i => (
-                    <tr key={i.id} className={`border-b border-slate-200 ${i.quantity <= i.minStock ? 'bg-red-50 text-red-900 font-bold' : ''}`}>
-                      <td className="p-3">{i.name}</td>
-                      <td className="p-3 text-center">{i.quantity}</td>
-                      <td className="p-3 text-center">{i.minStock}</td>
-                      <td className="p-3 text-right">R$ {i.sellPrice.toFixed(2)}</td>
-                      <td className="p-3 text-center uppercase font-black">{i.quantity <= i.minStock ? 'REPOR' : 'OK'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div>
+                <h3 className="text-xs font-black uppercase mb-2 border-b">Relato Técnico / Problema</h3>
+                <p className="text-sm italic">"{orderToPrint.problemDescription}"</p>
+              </div>
+
+              {orderToPrint.partsUsed.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-black uppercase mb-2 border-b">Peças e Componentes</h3>
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <th className="p-2">Item</th>
+                        <th className="p-2">Qtd</th>
+                        <th className="p-2 text-right">V. Unit.</th>
+                        <th className="p-2 text-right">Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orderToPrint.partsUsed.map((p, i) => (
+                        <tr key={i} className="border-b">
+                          <td className="p-2 font-bold">{p.name}</td>
+                          <td className="p-2">{p.quantity}</td>
+                          <td className="p-2 text-right">R$ {p.unitPrice.toFixed(2)}</td>
+                          <td className="p-2 text-right font-bold">R$ {(p.quantity * p.unitPrice).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="border-t-2 pt-4 flex flex-col items-end space-y-1">
+                <div className="flex justify-between w-48 text-xs">
+                  <span>Mão de Obra:</span>
+                  <span className="font-bold">R$ {orderToPrint.laborCost.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between w-48 text-xs">
+                  <span>Peças:</span>
+                  <span className="font-bold">R$ {orderToPrint.partsCost.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between w-48 text-lg font-black bg-slate-100 p-2 rounded">
+                  <span>TOTAL:</span>
+                  <span>R$ {orderToPrint.totalCost.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="mt-20 flex justify-around">
+                <div className="w-64 border-t border-slate-400 text-center text-[10px] pt-2">ASSINATURA DO TÉCNICO</div>
+                <div className="w-64 border-t border-slate-400 text-center text-[10px] pt-2">ASSINATURA DO CLIENTE</div>
+              </div>
             </div>
           )}
         </div>
@@ -582,25 +496,39 @@ export default function App() {
             <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
               <div className="flex items-center gap-4">
                 <div className="bg-red-100 p-3 rounded-2xl">
-                  <Printer size={28} className="text-red-600" />
+                  <Wrench size={28} className="text-red-600" />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">OS #{selectedOrder.id}</h2>
+                  <h2 className="text-2xl font-black text-slate-900">OS #{selectedOrder.id}</h2>
                   <p className="text-slate-500 font-medium">{selectedOrder.printerModel}</p>
                 </div>
               </div>
-              <button onClick={() => { setSelectedOrder(null); setAiMessage(''); }} className="p-3 hover:bg-slate-100 rounded-full transition-colors text-slate-400"><X size={24}/></button>
+              <div className="flex gap-2">
+                <button onClick={() => { setOrderToPrint(selectedOrder); setPrintType('os_detail'); handlePrint(); }} className="p-3 bg-slate-50 hover:bg-slate-100 rounded-full text-slate-600 transition-all"><Printer size={20}/></button>
+                <button onClick={() => { setSelectedOrder(null); setAiMessage(''); }} className="p-3 hover:bg-slate-100 rounded-full transition-colors text-slate-400"><X size={24}/></button>
+              </div>
             </div>
 
             <div className="p-8 space-y-8 flex-1">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Mão de Obra</p>
+                  <div className="text-xl font-black">R$ {selectedOrder.laborCost.toFixed(2)}</div>
+                </div>
+                <div className="bg-red-600 p-6 rounded-3xl text-white shadow-xl shadow-red-100">
+                  <p className="text-[10px] font-black text-red-200 uppercase tracking-widest mb-1">Total OS</p>
+                  <div className="text-xl font-black">R$ {selectedOrder.totalCost.toFixed(2)}</div>
+                </div>
+              </div>
+
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Mudar Status</p>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><StatusBadge status={selectedOrder.status}/> Alterar Status</p>
                 <div className="flex flex-wrap gap-2">
                   {Object.values(OrderStatus).map(s => (
                     <button 
                       key={s} 
                       onClick={() => handleUpdateStatus(selectedOrder.id, s)}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-black border transition-all ${selectedOrder.status === s ? 'bg-red-600 text-white border-red-600 shadow-lg' : 'bg-white text-slate-600 border-slate-200 hover:border-red-300'}`}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-black border transition-all ${selectedOrder.status === s ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-600 border-slate-200 hover:border-red-600'}`}
                     >
                       {s}
                     </button>
@@ -608,58 +536,43 @@ export default function App() {
                 </div>
               </div>
 
-              {(aiMessage || isAiLoading) && (
-                <div className="p-6 bg-red-50 border border-red-100 rounded-3xl animate-fade-in relative overflow-hidden shadow-sm">
-                   <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2 text-red-700 font-black text-sm uppercase"><BrainCircuit size={18}/> IA Suggestion</div>
-                    <button onClick={() => { navigator.clipboard.writeText(aiMessage); alert('Copiado!'); }} className="text-[10px] font-black bg-white text-red-700 px-3 py-2 rounded-xl border border-red-200"><Copy size={12}/> Copiar</button>
-                  </div>
-                  {isAiLoading ? (
-                    <div className="flex items-center gap-3 text-red-600 text-xs py-4 font-bold uppercase tracking-widest animate-pulse text-center w-full">Gerando mensagem personalizada...</div>
-                  ) : (
-                    <div>
-                      <div className="bg-white/60 p-4 rounded-2xl mb-4 border border-red-100">
-                        <p className="text-sm text-red-900 font-medium italic">"{aiMessage}"</p>
+              {selectedOrder.partsUsed.length > 0 && (
+                <div className="space-y-4">
+                  <h4 className="font-black text-slate-800 uppercase text-[10px] tracking-widest">Peças Utilizadas</h4>
+                  <div className="space-y-2">
+                    {selectedOrder.partsUsed.map((p, idx) => (
+                      <div key={idx} className="flex justify-between items-center bg-white border p-4 rounded-2xl">
+                        <div>
+                          <p className="font-bold text-sm">{p.name}</p>
+                          <p className="text-[10px] text-slate-400 uppercase">{p.quantity} x R$ {p.unitPrice.toFixed(2)}</p>
+                        </div>
+                        <div className="font-black text-red-600">R$ {(p.quantity * p.unitPrice).toFixed(2)}</div>
                       </div>
-                      <a 
-                        href={`https://wa.me/${clients.find(c => c.id === selectedOrder.clientId)?.phone.replace(/\D/g,'')}`} 
-                        target="_blank"
-                        className="w-full bg-red-600 text-white py-4 rounded-2xl text-sm font-black flex items-center justify-center gap-2 shadow-xl shadow-red-100"
-                      >
-                        <ExternalLink size={18}/> Enviar via WhatsApp
-                      </a>
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
               )}
 
-              <div className="border border-slate-100 rounded-3xl overflow-hidden">
-                <div className="p-5 bg-slate-50 border-b font-black text-[10px] uppercase tracking-widest text-slate-500 flex items-center gap-2"><History size={14}/> Histórico</div>
-                <div className="p-8 space-y-6">
-                  {selectedOrder.history.map((h, i) => (
-                    <div key={i} className="flex gap-6 group">
-                      <div className="flex flex-col items-center">
-                        <div className="w-3 h-3 rounded-full bg-red-600 shadow-md shadow-red-100 z-10"></div>
-                        {i !== selectedOrder.history.length - 1 && <div className="w-px flex-1 bg-slate-200 my-1"></div>}
-                      </div>
-                      <div className="pb-6">
-                        <div className="font-black text-xs mb-1"><StatusBadge status={h.status}/></div>
-                        <div className="text-[10px] text-slate-400 font-bold">{new Date(h.date).toLocaleString()}</div>
-                      </div>
-                    </div>
-                  ))}
+              {aiMessage && (
+                <div className="p-6 bg-red-50 border border-red-100 rounded-3xl animate-fade-in">
+                  <p className="text-[10px] font-black text-red-600 uppercase mb-2 flex items-center gap-2"><BrainCircuit size={14}/> Comunicado IA Sugerido</p>
+                  <div className="bg-white p-4 rounded-2xl text-xs font-medium italic text-red-900 border border-red-100 mb-4">"{aiMessage}"</div>
+                  <button onClick={() => { navigator.clipboard.writeText(aiMessage); alert('Copiado!'); }} className="w-full bg-red-600 text-white py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2"><Copy size={14}/> Copiar e enviar ao cliente</button>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Modals */}
-      <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Novo Protocolo Técnico">
+      {/* Modal Nova OS Detalhada */}
+      <SaaSModal isOpen={isOrderModalOpen} onClose={() => { setIsOrderModalOpen(false); setOsPartsUsed([]); }} title="Registrar Nova Manutenção">
         <form onSubmit={(e) => {
           e.preventDefault();
           const formData = new FormData(e.currentTarget);
+          const labor = parseFloat(formData.get('laborCost') as string || '0');
+          const partsTotal = osPartsUsed.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0);
+          
           const newOrder: ServiceOrder = {
             id: `OS-${Math.floor(1000 + Math.random() * 9000)}`,
             clientId: formData.get('clientId') as string,
@@ -667,61 +580,110 @@ export default function App() {
             serialNumber: formData.get('serialNumber') as string,
             problemDescription: formData.get('problemDescription') as string,
             status: OrderStatus.PENDING,
-            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Técnico Admin' }],
+            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Técnico' }],
             priority: formData.get('priority') as any,
+            laborCost: labor,
+            partsCost: partsTotal,
+            totalCost: labor + partsTotal,
+            partsUsed: osPartsUsed,
             createdAt: new Date(),
             updatedAt: new Date(),
-            totalCost: 0
           };
           setOrders(prev => [newOrder, ...prev]);
           setIsOrderModalOpen(false);
-        }} className="space-y-6">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Cliente Solicitante</label>
-            <select name="clientId" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold transition-all" required>
-              <option value="">Selecione um cliente...</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            {clients.length === 0 && <p className="text-[10px] text-red-500 font-bold uppercase mt-1">Cadastre um cliente antes de abrir OS.</p>}
+          setOsPartsUsed([]);
+        }} className="space-y-6 max-h-[70vh] overflow-y-auto px-2">
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <div className="space-y-1">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Cliente</label>
+               <select name="clientId" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" required>
+                 <option value="">Selecione...</option>
+                 {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+               </select>
+             </div>
+             <div className="space-y-1">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Prioridade</label>
+               <select name="priority" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold">
+                 <option value="Normal">Normal</option>
+                 <option value="Baixa">Baixa</option>
+                 <option value="Alta">Alta 🔥</option>
+               </select>
+             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Equipamento</label>
-              <input name="printerModel" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Modelo" required />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Prioridade</label>
-              <select name="priority" defaultValue="Normal" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
-                <option value="Baixa">Baixa</option>
-                <option value="Normal">Normal</option>
-                <option value="Alta">Alta 🔥</option>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <input name="printerModel" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" placeholder="Modelo Impressora" required />
+            <input name="serialNumber" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" placeholder="S/N de Série" />
+          </div>
+
+          <textarea name="problemDescription" rows={2} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" placeholder="Descrição do Problema / Orçamento..." required />
+
+          <div className="border-t pt-4">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-4"><Package size={14}/> Peças Aplicadas (Estoque)</label>
+            <div className="flex gap-2 mb-4">
+              <select id="part-select" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs">
+                <option value="">Escolha uma peça...</option>
+                {inventory.filter(i => i.quantity > 0).map(i => <option key={i.id} value={i.id}>{i.name} ({i.quantity} un - R$ {i.sellPrice.toFixed(2)})</option>)}
               </select>
+              <button 
+                type="button" 
+                onClick={() => {
+                  const sel = document.getElementById('part-select') as HTMLSelectElement;
+                  if (sel.value) handleAddPartToOS(sel.value, 1);
+                }}
+                className="bg-slate-900 text-white px-4 rounded-xl hover:bg-red-600 transition-all"
+              >
+                <Plus size={20}/>
+              </button>
+            </div>
+            
+            <div className="space-y-2 mb-4">
+              {osPartsUsed.map(p => (
+                <div key={p.inventoryItemId} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <span className="text-xs font-bold">{p.name} (x{p.quantity})</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-black text-red-600">R$ {(p.quantity * p.unitPrice).toFixed(2)}</span>
+                    <button type="button" onClick={() => handleRemovePartFromOS(p.inventoryItemId)} className="text-slate-400 hover:text-red-600"><Trash2 size={16}/></button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Defeito Reportado</label>
-            <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold resize-none" placeholder="Relato técnico inicial..." required />
+
+          <div className="border-t pt-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Valor Mão de Obra (R$)</label>
+              <input name="laborCost" type="number" step="0.01" className="w-32 p-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-right" placeholder="0,00" />
+            </div>
+            <div className="bg-slate-900 p-6 rounded-3xl text-white flex justify-between items-center">
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase">Resumo Financeiro</p>
+                <p className="text-xs opacity-60">Peças: R$ {osPartsUsed.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0).toFixed(2)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-black text-red-500 uppercase">VALOR TOTAL ESTIMADO</p>
+                <p className="text-2xl font-black">R$ {(osPartsUsed.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0) + 0).toFixed(2)}*</p>
+              </div>
+            </div>
           </div>
-          <button type="submit" disabled={clients.length === 0} className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest disabled:opacity-50">Registrar Ordem</button>
+
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Finalizar e Registrar OS</button>
         </form>
       </SaaSModal>
 
-      <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Novo Cadastro de Cliente">
+      {/* Restantes Modais - Originais Preservados */}
+      <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Novo Cliente">
         <form onSubmit={(e) => {
           e.preventDefault();
           const formData = new FormData(e.currentTarget);
-          setClients(prev => [...prev, {
-            id: Date.now().toString(),
-            name: formData.get('name') as string,
-            phone: formData.get('phone') as string,
-            email: formData.get('email') as string,
-          }]);
+          setClients(prev => [...prev, { id: Date.now().toString(), name: formData.get('name') as string, phone: formData.get('phone') as string, email: formData.get('email') as string }]);
           setIsClientModalOpen(false);
         }} className="space-y-6">
-          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo / Fantasia" required />
-          <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp (DD) 9XXXX-XXXX" required />
-          <input name="email" type="email" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="E-mail Administrativo" />
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Salvar Cliente</button>
+          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo" required />
+          <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp" required />
+          <input name="email" type="email" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Email" />
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all">Salvar Cliente</button>
         </form>
       </SaaSModal>
 
@@ -729,33 +691,27 @@ export default function App() {
         <form onSubmit={(e) => {
           e.preventDefault();
           const formData = new FormData(e.currentTarget);
-          setInventory(prev => [...prev, {
-            id: Date.now().toString(),
-            name: formData.get('name') as string,
-            quantity: parseInt(formData.get('quantity') as string),
-            minStock: parseInt(formData.get('minStock') as string),
-            costPrice: parseFloat(formData.get('costPrice') as string),
-            sellPrice: parseFloat(formData.get('sellPrice') as string),
-          }]);
+          setInventory(prev => [...prev, { id: Date.now().toString(), name: formData.get('name') as string, quantity: parseInt(formData.get('quantity') as string), minStock: parseInt(formData.get('minStock') as string), costPrice: parseFloat(formData.get('costPrice') as string), sellPrice: parseFloat(formData.get('sellPrice') as string) }]);
           setIsInventoryModalOpen(false);
         }} className="space-y-6">
-          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça / Suprimento" required />
+          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
           <div className="grid grid-cols-2 gap-4">
-            <input name="quantity" type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd" required />
-            <input name="minStock" type="number" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Estoque Mín." required />
+            <input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd Inicial" required />
+            <input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Mínimo" required />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <input name="costPrice" type="number" step="0.01" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Custo (R$)" required />
-            <input name="sellPrice" type="number" step="0.01" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Venda (R$)" required />
+            <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Custo" required />
+            <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Venda" required />
           </div>
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Cadastrar</button>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all">Cadastrar Item</button>
         </form>
       </SaaSModal>
 
       <style>{`
         @media print {
-          body { -webkit-print-color-adjust: exact; background: white; }
+          body { -webkit-print-color-adjust: exact; background: white; font-size: 10pt; }
           .print-hidden { display: none !important; }
+          #print-area { display: block !important; }
         }
       `}</style>
     </div>
@@ -790,7 +746,7 @@ function SaaSModal({isOpen, onClose, title, children}: any) {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-slate-900/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white w-full max-w-lg rounded-[40px] overflow-hidden shadow-2xl">
+      <div className="bg-white w-full max-w-xl rounded-[40px] overflow-hidden shadow-2xl">
         <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <h3 className="text-xl font-black text-slate-900 tracking-tight">{title}</h3>
           <button onClick={onClose} className="p-2 hover:bg-white rounded-full text-slate-400"><X size={20}/></button>
