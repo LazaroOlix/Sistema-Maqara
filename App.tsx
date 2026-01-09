@@ -31,7 +31,8 @@ import {
   MinusCircle,
   Calculator,
   Receipt,
-  Save
+  Save,
+  Search
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -88,8 +89,23 @@ export default function App() {
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [isInventoryModalOpen, setIsInventoryModalOpen] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
   
+  // Estado para a OS selecionada e sua cópia de edição (Rascunho)
+  const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
+  const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Estados para o Autocomplete de Cliente
+  const [clientSearch, setClientSearch] = useState('');
+  const [showClientResults, setShowClientResults] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState('');
+
+  const filteredClients = useMemo(() => {
+    if (!clientSearch) return [];
+    return clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()));
+  }, [clientSearch, clients]);
+
   const [aiMessage, setAiMessage] = useState<string>('');
   const [isAiLoading, setIsAiLoading] = useState(false);
 
@@ -97,7 +113,15 @@ export default function App() {
   const [clientToPrint, setClientToPrint] = useState<Client | null>(null);
   const [orderToPrint, setOrderToPrint] = useState<ServiceOrder | null>(null);
 
-  // Handlers de Exclusão
+  // Efeito para sincronizar editingOrder quando selectedOrder mudar
+  useEffect(() => {
+    if (selectedOrder) {
+      setEditingOrder(JSON.parse(JSON.stringify(selectedOrder))); // Deep clone
+    } else {
+      setEditingOrder(null);
+    }
+  }, [selectedOrder]);
+
   const handleDeleteClient = (id: string) => {
     if (window.confirm('Excluir este cliente?')) {
       setClients(prev => prev.filter(c => c.id !== id));
@@ -118,109 +142,159 @@ export default function App() {
     }
   };
 
-  // Nova Lógica de Gerenciamento de Peças dentro da OS (Diagnóstico)
-  const handleAddPartToOrder = (orderId: string, itemId: string, qty: number) => {
+  // Funções que alteram APENAS o editingOrder (Draft)
+  const handleAddPartToDraft = (itemId: string, qty: number) => {
+    if (!editingOrder) return;
     const item = inventory.find(i => i.id === itemId);
-    if (!item || item.quantity < qty) {
-      alert('Quantidade insuficiente no estoque!');
+    if (!item) return;
+
+    // Verificar se já existe a peça no draft para não exceder o estoque real
+    const alreadyUsedInDraft = editingOrder.partsUsed.find(p => p.inventoryItemId === itemId)?.quantity || 0;
+    if (item.quantity < alreadyUsedInDraft + qty) {
+      alert('Quantidade insuficiente no estoque disponível!');
       return;
     }
 
-    setOrders(prevOrders => prevOrders.map(order => {
-      if (order.id === orderId) {
-        const existingPart = order.partsUsed.find(p => p.inventoryItemId === itemId);
-        let newPartsUsed;
-        if (existingPart) {
-          newPartsUsed = order.partsUsed.map(p => 
-            p.inventoryItemId === itemId ? { ...p, quantity: p.quantity + qty } : p
-          );
-        } else {
-          newPartsUsed = [...order.partsUsed, { 
-            inventoryItemId: itemId, 
-            name: item.name, 
-            quantity: qty, 
-            unitPrice: item.sellPrice 
-          }];
-        }
+    const newPartsUsed = [...editingOrder.partsUsed];
+    const existingIndex = newPartsUsed.findIndex(p => p.inventoryItemId === itemId);
 
-        const newPartsCost = newPartsUsed.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0);
-        const updatedOrder = { 
-          ...order, 
-          partsUsed: newPartsUsed, 
-          partsCost: newPartsCost,
-          totalCost: order.laborCost + newPartsCost,
-          updatedAt: new Date()
-        };
-        
-        if (selectedOrder?.id === orderId) setSelectedOrder(updatedOrder);
-        return updatedOrder;
-      }
-      return order;
-    }));
+    if (existingIndex > -1) {
+      newPartsUsed[existingIndex] = { 
+        ...newPartsUsed[existingIndex], 
+        quantity: newPartsUsed[existingIndex].quantity + qty 
+      };
+    } else {
+      newPartsUsed.push({ 
+        inventoryItemId: itemId, 
+        name: item.name, 
+        quantity: qty, 
+        unitPrice: item.sellPrice 
+      });
+    }
 
-    setInventory(prevInv => prevInv.map(i => 
-      i.id === itemId ? { ...i, quantity: i.quantity - qty } : i
-    ));
+    const partsCost = newPartsUsed.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0);
+    setEditingOrder({
+      ...editingOrder,
+      partsUsed: newPartsUsed,
+      partsCost: partsCost,
+      totalCost: editingOrder.laborCost + partsCost
+    });
   };
 
-  const handleRemovePartFromOrder = (orderId: string, itemId: string) => {
-    setOrders(prevOrders => prevOrders.map(order => {
-      if (order.id === orderId) {
-        const partToRemove = order.partsUsed.find(p => p.inventoryItemId === itemId);
-        if (!partToRemove) return order;
-
-        const newPartsUsed = order.partsUsed.filter(p => p.inventoryItemId !== itemId);
-        const newPartsCost = newPartsUsed.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0);
-        
-        // Devolver ao estoque
-        setInventory(prevInv => prevInv.map(i => 
-          i.id === itemId ? { ...i, quantity: i.quantity + partToRemove.quantity } : i
-        ));
-
-        const updatedOrder = { 
-          ...order, 
-          partsUsed: newPartsUsed, 
-          partsCost: newPartsCost,
-          totalCost: order.laborCost + newPartsCost,
-          updatedAt: new Date()
-        };
-        
-        if (selectedOrder?.id === orderId) setSelectedOrder(updatedOrder);
-        return updatedOrder;
-      }
-      return order;
-    }));
+  const handleRemovePartFromDraft = (itemId: string) => {
+    if (!editingOrder) return;
+    const newPartsUsed = editingOrder.partsUsed.filter(p => p.inventoryItemId !== itemId);
+    const partsCost = newPartsUsed.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0);
+    setEditingOrder({
+      ...editingOrder,
+      partsUsed: newPartsUsed,
+      partsCost: partsCost,
+      totalCost: editingOrder.laborCost + partsCost
+    });
   };
 
-  const handleUpdateLaborCost = (orderId: string, cost: number) => {
-    setOrders(prevOrders => prevOrders.map(order => {
-      if (order.id === orderId) {
-        const updatedOrder = { 
-          ...order, 
-          laborCost: cost,
-          totalCost: cost + order.partsCost,
-          updatedAt: new Date()
-        };
-        if (selectedOrder?.id === orderId) setSelectedOrder(updatedOrder);
-        return updatedOrder;
+  const handleSaveOrderChanges = async () => {
+    if (!editingOrder || !selectedOrder) return;
+
+    setIsSaving(true);
+
+    // 1. Gerar Logs de Histórico
+    const logs: StatusHistoryEntry[] = [];
+    const timestamp = new Date();
+
+    if (editingOrder.laborCost !== selectedOrder.laborCost) {
+      logs.push({
+        status: editingOrder.status,
+        date: timestamp,
+        user: 'Técnico',
+        description: `Mão de obra alterada: R$ ${selectedOrder.laborCost.toFixed(2)} -> R$ ${editingOrder.laborCost.toFixed(2)}`
+      });
+    }
+
+    if (editingOrder.diagnosis !== selectedOrder.diagnosis) {
+      logs.push({
+        status: editingOrder.status,
+        date: timestamp,
+        user: 'Técnico',
+        description: 'Diagnóstico técnico atualizado.'
+      });
+    }
+
+    // Detectar peças adicionadas ou removidas para o log
+    editingOrder.partsUsed.forEach(p => {
+      const old = selectedOrder.partsUsed.find(op => op.inventoryItemId === p.inventoryItemId);
+      if (!old) {
+        logs.push({ status: editingOrder.status, date: timestamp, user: 'Técnico', description: `Peça adicionada: ${p.name} (${p.quantity} un)` });
+      } else if (old.quantity !== p.quantity) {
+        logs.push({ status: editingOrder.status, date: timestamp, user: 'Técnico', description: `Quantidade da peça ${p.name} alterada para ${p.quantity} un` });
       }
-      return order;
-    }));
+    });
+
+    selectedOrder.partsUsed.forEach(p => {
+      if (!editingOrder.partsUsed.find(np => np.inventoryItemId === p.inventoryItemId)) {
+        logs.push({ status: editingOrder.status, date: timestamp, user: 'Técnico', description: `Peça removida: ${p.name}` });
+      }
+    });
+
+    // 2. Atualizar Estoque (Diferença entre antigo e novo)
+    const updatedInventory = [...inventory];
+    
+    // Devolver peças antigas ao estoque virtualmente
+    selectedOrder.partsUsed.forEach(oldPart => {
+      const item = updatedInventory.find(i => i.id === oldPart.inventoryItemId);
+      if (item) item.quantity += oldPart.quantity;
+    });
+
+    // Subtrair peças novas do estoque
+    editingOrder.partsUsed.forEach(newPart => {
+      const item = updatedInventory.find(i => i.id === newPart.inventoryItemId);
+      if (item) item.quantity -= newPart.quantity;
+    });
+
+    // 3. Persistir mudanças
+    const updatedOrder = {
+      ...editingOrder,
+      history: [...logs, ...editingOrder.history],
+      updatedAt: timestamp
+    };
+
+    setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+    setInventory(updatedInventory);
+    setSelectedOrder(updatedOrder);
+    
+    setIsSaving(false);
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 2000);
   };
 
-  const handleUpdateDiagnosis = (orderId: string, diagnosis: string) => {
-    setOrders(prevOrders => prevOrders.map(order => {
-      if (order.id === orderId) {
-        const updatedOrder = { ...order, diagnosis, updatedAt: new Date() };
-        if (selectedOrder?.id === orderId) setSelectedOrder(updatedOrder);
-        return updatedOrder;
-      }
-      return order;
-    }));
+  const handleUpdateStatus = async (id: string, newStatus: OrderStatus) => {
+    const historyEntry: StatusHistoryEntry = { 
+      status: newStatus, 
+      date: new Date(), 
+      user: 'Técnico',
+      description: `Status alterado para ${newStatus}`
+    };
+    
+    const timestamp = new Date();
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus, updatedAt: timestamp, history: [historyEntry, ...o.history] } : o));
+    
+    if (selectedOrder?.id === id) {
+      const newSel = { ...selectedOrder, status: newStatus, updatedAt: timestamp, history: [historyEntry, ...selectedOrder.history] };
+      setSelectedOrder(newSel);
+    }
+
+    if (newStatus === OrderStatus.READY || newStatus === OrderStatus.DELIVERED) {
+      setIsAiLoading(true);
+      const target = orders.find(o => o.id === id);
+      const client = clients.find(c => c.id === target?.clientId);
+      const msg = await generateClientMessage(client?.name || 'Cliente', target?.printerModel || 'Impressora', newStatus, "Equipamento pronto para retirada.");
+      setAiMessage(msg);
+      setIsAiLoading(false);
+    }
   };
 
   const handleExportBackup = () => {
-    const backupData = { clients, inventory, orders, backupDate: new Date().toISOString(), version: "1.5.0" };
+    const backupData = { clients, inventory, orders, backupDate: new Date().toISOString(), version: "1.6.0" };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -237,13 +311,11 @@ export default function App() {
     reader.onload = (e) => {
       try {
         const data = JSON.parse(e.target?.result as string);
-        if (window.confirm('Substituir dados atuais?')) {
-          setClients(data.clients || []);
-          setInventory(data.inventory || []);
-          setOrders(data.orders || []);
-          alert('Dados restaurados!');
-        }
-      } catch { alert('Arquivo inválido.'); }
+        setClients(data.clients || []);
+        setInventory(data.inventory || []);
+        setOrders(data.orders || []);
+        alert('Dados restaurados com sucesso!');
+      } catch { alert('Arquivo de backup inválido.'); }
     };
     reader.readAsText(file);
   };
@@ -266,24 +338,6 @@ export default function App() {
   }, [orders]);
 
   const COLORS = ['#dc2626', '#ef4444', '#f87171', '#fca5a5', '#fee2e2', '#64748b'];
-
-  const handleUpdateStatus = async (id: string, newStatus: OrderStatus) => {
-    const historyEntry: StatusHistoryEntry = { status: newStatus, date: new Date(), user: 'Técnico' };
-    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus, updatedAt: new Date(), history: [historyEntry, ...o.history] } : o));
-    
-    if (selectedOrder?.id === id) {
-      setSelectedOrder(prev => prev ? { ...prev, status: newStatus, history: [historyEntry, ...prev.history] } : null);
-    }
-
-    if (newStatus === OrderStatus.READY || newStatus === OrderStatus.DELIVERED) {
-      setIsAiLoading(true);
-      const target = orders.find(o => o.id === id);
-      const client = clients.find(c => c.id === target?.clientId);
-      const msg = await generateClientMessage(client?.name || 'Cliente', target?.printerModel || 'Impressora', newStatus, "Serviço finalizado.");
-      setAiMessage(msg);
-      setIsAiLoading(false);
-    }
-  };
 
   const StatusBadge = ({ status }: { status: OrderStatus }) => {
     const colors: any = {
@@ -326,12 +380,16 @@ export default function App() {
           <div className="flex justify-between items-end mb-4 print:hidden">
             <div>
               <h1 className="text-3xl font-black text-slate-900 tracking-tight capitalize">{activeTab === 'dashboard' ? 'Visão Geral' : activeTab === 'orders' ? 'Ordens de Serviço' : activeTab}</h1>
-              <p className="text-slate-500 text-sm mt-1">Fluxo profissional de manutenção.</p>
+              <p className="text-slate-500 text-sm mt-1">Gestão profissional e integrada.</p>
             </div>
             <div className="flex gap-3">
               {activeTab === 'orders' && (
                 <button 
-                  onClick={() => setIsOrderModalOpen(true)}
+                  onClick={() => {
+                    setClientSearch('');
+                    setSelectedClientId('');
+                    setIsOrderModalOpen(true);
+                  }}
                   className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl shadow-red-100 flex items-center gap-2 transition-all active:scale-95"
                 >
                   <PlusCircle size={20}/> Nova Entrada
@@ -355,12 +413,12 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <DashboardStat label="Faturamento" value={`R$ ${stats.revenue.toFixed(2)}`} icon={<TrendingUp className="text-green-600"/>} trend="+12%" />
                 <DashboardStat label="OS Ativas" value={stats.pending.toString()} icon={<Clock className="text-amber-600"/>} trend="Em Processo" />
-                <DashboardStat label="Estoque Baixo" value={stats.lowStock.toString()} icon={<AlertTriangle className="text-red-600"/>} trend="Atenção" critical={stats.lowStock > 0} />
+                <DashboardStat label="Estoque Crítico" value={stats.lowStock.toString()} icon={<AlertTriangle className="text-red-600"/>} trend="Atenção" critical={stats.lowStock > 0} />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-8"><BarChart3 size={18} className="text-red-600"/> Distribuição</h3>
+                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-8"><BarChart3 size={18} className="text-red-600"/> Status dos Serviços</h3>
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -374,14 +432,14 @@ export default function App() {
                 </div>
 
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 flex flex-col">
-                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-6"><Database size={18} className="text-red-600"/> Backup & Segurança</h3>
-                  <p className="text-slate-500 text-sm mb-8">Proteja seus dados contra perdas. Exporte uma cópia regularmente.</p>
+                  <h3 className="font-black text-slate-800 flex items-center gap-2 mb-6"><Database size={18} className="text-red-600"/> Backup do Sistema</h3>
+                  <p className="text-slate-500 text-sm mb-8">Exporte seus dados regularmente para garantir a segurança da sua assistência.</p>
                   <div className="grid grid-cols-1 gap-4 mt-auto">
                     <button onClick={handleExportBackup} className="w-full flex items-center justify-center gap-3 bg-red-600 text-white py-4 rounded-2xl font-black hover:bg-red-700 transition-all shadow-lg shadow-red-100">
-                      <Download size={20}/> Gerar Backup Completo
+                      <Download size={20}/> Exportar Backup JSON
                     </button>
                     <button onClick={() => fileInputRef.current?.click()} className="w-full flex items-center justify-center gap-3 bg-white text-slate-700 border border-slate-200 py-4 rounded-2xl font-black hover:bg-slate-50 transition-all">
-                      <Upload size={20}/> Restaurar Backup
+                      <Upload size={20}/> Importar Backup
                     </button>
                     <input type="file" ref={fileInputRef} onChange={handleImportBackup} accept=".json" className="hidden" />
                   </div>
@@ -561,8 +619,8 @@ export default function App() {
         </div>
       </main>
 
-      {/* Drawer Detalhes OS - AGORA COM ÁREA DE DIAGNÓSTICO E FINANCEIRO */}
-      {selectedOrder && (
+      {/* Drawer Detalhes OS - AGORA COM DRAFT E SALVAMENTO EXPLÍCITO */}
+      {selectedOrder && editingOrder && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-end print:hidden">
           <div className="w-full max-w-2xl bg-white h-full shadow-2xl overflow-y-auto animate-slide-in-right flex flex-col">
             {/* Header Drawer */}
@@ -570,12 +628,12 @@ export default function App() {
               <div className="flex items-center gap-4">
                 <div className="bg-red-100 p-3 rounded-2xl"><Wrench size={28} className="text-red-600" /></div>
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900">OS #{selectedOrder.id}</h2>
-                  <p className="text-slate-500 font-medium">{selectedOrder.printerModel}</p>
+                  <h2 className="text-2xl font-black text-slate-900">OS #{editingOrder.id}</h2>
+                  <p className="text-slate-500 font-medium">{editingOrder.printerModel}</p>
                 </div>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => { setOrderToPrint(selectedOrder); setPrintType('os_detail'); handlePrint(); }} className="p-3 bg-slate-50 hover:bg-slate-100 rounded-full text-slate-600 transition-all"><Printer size={20}/></button>
+                <button onClick={() => { setOrderToPrint(editingOrder); setPrintType('os_detail'); handlePrint(); }} className="p-3 bg-slate-50 hover:bg-slate-100 rounded-full text-slate-600 transition-all"><Printer size={20}/></button>
                 <button onClick={() => { setSelectedOrder(null); setAiMessage(''); }} className="p-3 hover:bg-slate-100 rounded-full transition-colors text-slate-400"><X size={24}/></button>
               </div>
             </div>
@@ -585,13 +643,13 @@ export default function App() {
               
               {/* Status Section */}
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><StatusBadge status={selectedOrder.status}/> Gerenciar Status</p>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><StatusBadge status={editingOrder.status}/> Gerenciar Status</p>
                 <div className="flex flex-wrap gap-2">
                   {Object.values(OrderStatus).map(s => (
                     <button 
                       key={s} 
-                      onClick={() => handleUpdateStatus(selectedOrder.id, s)}
-                      className={`px-4 py-2 rounded-xl text-[10px] font-black border transition-all ${selectedOrder.status === s ? 'bg-red-600 text-white border-red-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-red-600'}`}
+                      onClick={() => handleUpdateStatus(editingOrder.id, s)}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-black border transition-all ${editingOrder.status === s ? 'bg-red-600 text-white border-red-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-red-600'}`}
                     >
                       {s}
                     </button>
@@ -599,7 +657,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Seção de Diagnóstico e Custos (UNICO LOCAL PARA PEÇAS E VALORES) */}
+              {/* Seção de Diagnóstico e Custos */}
               <div className="border border-red-100 rounded-[32px] overflow-hidden bg-white shadow-sm">
                 <div className="p-5 bg-red-50/50 border-b border-red-100 font-black text-[10px] uppercase tracking-widest text-red-600 flex items-center gap-2">
                   <BrainCircuit size={16}/> Diagnóstico Técnico & Custos
@@ -609,8 +667,8 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Relatório Técnico</label>
                     <textarea 
-                      value={selectedOrder.diagnosis || ''}
-                      onChange={(e) => handleUpdateDiagnosis(selectedOrder.id, e.target.value)}
+                      value={editingOrder.diagnosis || ''}
+                      onChange={(e) => setEditingOrder({...editingOrder, diagnosis: e.target.value})}
                       rows={3}
                       className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-medium text-sm focus:border-red-400 outline-none transition-colors"
                       placeholder="Descreva a solução aplicada e observações técnicas..."
@@ -619,10 +677,10 @@ export default function App() {
 
                   {/* Adição de Peças */}
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Aplicar Peças do Estoque</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Adicionar Peças do Estoque</label>
                     <div className="flex gap-2">
                       <select 
-                        id="drawer-part-select"
+                        id="drawer-part-select-rascunho"
                         className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs"
                       >
                         <option value="">Escolha uma peça...</option>
@@ -632,8 +690,8 @@ export default function App() {
                       </select>
                       <button 
                         onClick={() => {
-                          const sel = document.getElementById('drawer-part-select') as HTMLSelectElement;
-                          if (sel.value) handleAddPartToOrder(selectedOrder.id, sel.value, 1);
+                          const sel = document.getElementById('drawer-part-select-rascunho') as HTMLSelectElement;
+                          if (sel.value) handleAddPartToDraft(sel.value, 1);
                         }}
                         className="bg-red-600 text-white px-4 rounded-xl hover:bg-red-700 transition-all"
                       >
@@ -642,10 +700,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Lista de Peças na OS */}
-                  {selectedOrder.partsUsed.length > 0 && (
+                  {/* Lista de Peças no Draft */}
+                  {editingOrder.partsUsed.length > 0 && (
                     <div className="space-y-2">
-                      {selectedOrder.partsUsed.map((p, idx) => (
+                      {editingOrder.partsUsed.map((p, idx) => (
                         <div key={idx} className="flex justify-between items-center bg-white border p-4 rounded-2xl shadow-sm">
                           <div>
                             <p className="font-bold text-sm">{p.name}</p>
@@ -653,7 +711,7 @@ export default function App() {
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="font-black text-red-600">R$ {(p.quantity * p.unitPrice).toFixed(2)}</span>
-                            <button onClick={() => handleRemovePartFromOrder(selectedOrder.id, p.inventoryItemId)} className="text-slate-300 hover:text-red-600"><Trash2 size={16}/></button>
+                            <button onClick={() => handleRemovePartFromDraft(p.inventoryItemId)} className="text-slate-300 hover:text-red-600"><Trash2 size={16}/></button>
                           </div>
                         </div>
                       ))}
@@ -669,48 +727,62 @@ export default function App() {
                     <input 
                       type="number" 
                       step="0.01"
-                      value={selectedOrder.laborCost || ''}
-                      onChange={(e) => handleUpdateLaborCost(selectedOrder.id, parseFloat(e.target.value) || 0)}
+                      value={editingOrder.laborCost || ''}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value) || 0;
+                        setEditingOrder({...editingOrder, laborCost: val, totalCost: val + editingOrder.partsCost});
+                      }}
                       className="w-32 p-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-right focus:border-red-600 outline-none"
                       placeholder="0,00"
                     />
                   </div>
 
-                  {/* Resumo Financeiro Live */}
-                  <div className="bg-slate-900 p-6 rounded-3xl text-white shadow-xl shadow-slate-100 flex justify-between items-center">
-                    <div>
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Resumo de Cobrança</p>
-                      <p className="text-xs opacity-60">Peças: R$ {selectedOrder.partsCost.toFixed(2)}</p>
+                  {/* Resumo Financeiro */}
+                  <div className="bg-slate-900 p-6 rounded-3xl text-white flex justify-between items-center shadow-lg">
+                    <div className="text-left">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Subtotal Peças</p>
+                      <p className="text-lg font-bold">R$ {editingOrder.partsCost.toFixed(2)}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] font-black text-red-500 uppercase">Total Geral</p>
-                      <p className="text-2xl font-black">R$ {selectedOrder.totalCost.toFixed(2)}</p>
+                      <p className="text-2xl font-black">R$ {editingOrder.totalCost.toFixed(2)}</p>
                     </div>
                   </div>
+
+                  {/* BOTÃO SALVAR ALTERAÇÕES EXPLÍCITO */}
+                  <button 
+                    onClick={handleSaveOrderChanges}
+                    disabled={isSaving}
+                    className={`w-full py-4 rounded-2xl font-black uppercase tracking-widest transition-all flex items-center justify-center gap-3 ${saveSuccess ? 'bg-green-600 text-white' : 'bg-red-600 text-white hover:bg-red-700 shadow-xl shadow-red-100'}`}
+                  >
+                    {isSaving ? <RefreshCcw className="animate-spin" size={20}/> : saveSuccess ? <CheckCircle size={20}/> : <Save size={20}/>}
+                    {saveSuccess ? 'Salvo com sucesso!' : 'Salvar alterações'}
+                  </button>
                 </div>
               </div>
 
               {/* Sugestão de IA */}
               {aiMessage && (
                 <div className="p-6 bg-red-50 border border-red-100 rounded-3xl animate-fade-in shadow-inner">
-                  <p className="text-[10px] font-black text-red-600 uppercase mb-2 flex items-center gap-2"><BrainCircuit size={14}/> Comunicado IA Sugerido</p>
+                  <p className="text-[10px] font-black text-red-600 uppercase mb-2 flex items-center gap-2"><BrainCircuit size={14}/> Sugestão de Comunicação</p>
                   <div className="bg-white p-4 rounded-2xl text-xs font-medium italic text-red-900 border border-red-100 mb-4">"{aiMessage}"</div>
-                  <button onClick={() => { navigator.clipboard.writeText(aiMessage); alert('Copiado!'); }} className="w-full bg-red-600 text-white py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-transform active:scale-95"><Copy size={14}/> Enviar via WhatsApp</button>
+                  <button onClick={() => { navigator.clipboard.writeText(aiMessage); alert('Copiado!'); }} className="w-full bg-red-600 text-white py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-transform active:scale-95"><Copy size={14}/> Copiar para WhatsApp</button>
                 </div>
               )}
 
-              {/* Histórico */}
+              {/* Histórico / Linha do Tempo */}
               <div className="border border-slate-100 rounded-3xl overflow-hidden">
-                <div className="p-5 bg-slate-50 border-b font-black text-[10px] uppercase tracking-widest text-slate-500 flex items-center gap-2"><History size={14}/> Linha do Tempo</div>
+                <div className="p-5 bg-slate-50 border-b font-black text-[10px] uppercase tracking-widest text-slate-500 flex items-center gap-2"><History size={14}/> Histórico de Eventos</div>
                 <div className="p-8 space-y-6">
-                  {selectedOrder.history.map((h, i) => (
+                  {editingOrder.history.map((h, i) => (
                     <div key={i} className="flex gap-6 group">
                       <div className="flex flex-col items-center">
                         <div className="w-2.5 h-2.5 rounded-full bg-red-600 shadow-sm z-10"></div>
-                        {i !== selectedOrder.history.length - 1 && <div className="w-px flex-1 bg-slate-200 my-1"></div>}
+                        {i !== editingOrder.history.length - 1 && <div className="w-px flex-1 bg-slate-200 my-1"></div>}
                       </div>
                       <div className="pb-4">
                         <div className="font-black text-[10px] mb-1"><StatusBadge status={h.status}/></div>
+                        {h.description && <div className="text-xs font-medium text-slate-700 mb-1">{h.description}</div>}
                         <div className="text-[10px] text-slate-400 font-bold">{new Date(h.date).toLocaleString()}</div>
                       </div>
                     </div>
@@ -722,20 +794,25 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal Nova OS - LIMPO (SEM FINANCEIRO/PEÇAS) */}
+      {/* Modal Nova OS - COM AUTOCOMPLETE DE CLIENTE */}
       <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova Ordem de Serviço">
         <form onSubmit={(e) => {
           e.preventDefault();
           const formData = new FormData(e.currentTarget);
           
+          if (!selectedClientId) {
+            alert('Por favor, selecione um cliente da lista.');
+            return;
+          }
+
           const newOrder: ServiceOrder = {
             id: `OS-${Math.floor(1000 + Math.random() * 9000)}`,
-            clientId: formData.get('clientId') as string,
+            clientId: selectedClientId,
             printerModel: formData.get('printerModel') as string,
             serialNumber: formData.get('serialNumber') as string,
             problemDescription: formData.get('problemDescription') as string,
             status: OrderStatus.PENDING,
-            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Recepção' }],
+            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Recepção', description: 'Entrada do equipamento na assistência.' }],
             priority: formData.get('priority') as any,
             laborCost: 0,
             partsCost: 0,
@@ -745,23 +822,54 @@ export default function App() {
             updatedAt: new Date(),
           };
           
-          if (!newOrder.clientId || !newOrder.problemDescription) {
-            alert('Preencha os dados do cliente e problema.');
-            return;
-          }
-
           setOrders(prev => [newOrder, ...prev]);
           setIsOrderModalOpen(false);
+          setClientSearch('');
+          setSelectedClientId('');
         }} className="space-y-6">
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-             <div className="space-y-1">
-               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Cliente Solicitante</label>
-               <select name="clientId" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:border-red-600 outline-none" required>
-                 <option value="">Selecione o cliente...</option>
-                 {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-               </select>
+             {/* Autocomplete de Cliente */}
+             <div className="space-y-1 relative">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Cliente (Buscar)</label>
+               <div className="relative">
+                 <input 
+                    type="text" 
+                    value={clientSearch}
+                    onChange={(e) => {
+                      setClientSearch(e.target.value);
+                      setShowClientResults(true);
+                      if (selectedClientId) setSelectedClientId('');
+                    }}
+                    onFocus={() => setShowClientResults(true)}
+                    className="w-full p-4 pl-10 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:border-red-600 outline-none"
+                    placeholder="Digite o nome..."
+                    required={!selectedClientId}
+                 />
+                 <Search className="absolute left-3 top-4 text-slate-400" size={18}/>
+                 {selectedClientId && <CheckCircle className="absolute right-3 top-4 text-green-500" size={18}/>}
+               </div>
+
+               {showClientResults && filteredClients.length > 0 && (
+                 <div className="absolute top-full left-0 right-0 z-50 mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl max-h-48 overflow-y-auto overflow-x-hidden">
+                   {filteredClients.map(c => (
+                     <div 
+                        key={c.id} 
+                        onClick={() => {
+                          setClientSearch(c.name);
+                          setSelectedClientId(c.id);
+                          setShowClientResults(false);
+                        }}
+                        className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b last:border-0 border-slate-50 text-sm flex justify-between items-center"
+                     >
+                        <span>{c.name}</span>
+                        <span className="text-[10px] text-slate-400">{c.phone}</span>
+                     </div>
+                   ))}
+                 </div>
+               )}
              </div>
+
              <div className="space-y-1">
                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Prioridade</label>
                <select name="priority" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:border-red-600 outline-none">
@@ -784,16 +892,11 @@ export default function App() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Defeito Reportado / Problema</label>
-            <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:border-red-600 outline-none resize-none" placeholder="O que está acontecendo com a impressora?" required />
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Defeito Reportado</label>
+            <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold focus:border-red-600 outline-none resize-none" placeholder="Relato do cliente..." required />
           </div>
 
-          <div className="bg-slate-50 p-4 rounded-2xl flex items-start gap-3 border border-slate-100">
-            <AlertTriangle className="text-amber-500 mt-1" size={18}/>
-            <p className="text-[10px] text-slate-500 font-medium leading-relaxed">Nota: Diagnóstico, peças e orçamentos devem ser preenchidos pelo técnico após o recebimento do equipamento na aba de gerenciamento.</p>
-          </div>
-
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Registrar Entrada</button>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Abrir Ordem de Serviço</button>
         </form>
       </SaaSModal>
 
@@ -832,11 +935,11 @@ export default function App() {
           <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
           <div className="grid grid-cols-2 gap-4">
             <input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd Inicial" required />
-            <input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Alerta Mínimo" required />
+            <input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Mínimo Alerta" required />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Custo (R$)" required />
-            <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Venda (R$)" required />
+            <input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Custo" required />
+            <input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Venda" required />
           </div>
           <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl shadow-red-100 hover:bg-red-700 transition-all uppercase tracking-widest">Salvar no Estoque</button>
         </form>

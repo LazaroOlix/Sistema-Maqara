@@ -34,6 +34,7 @@ export interface StatusHistoryEntry {
   status: OrderStatus;
   date: Date;
   user: string;
+  description?: string;
 }
 
 export interface ServiceOrder {
