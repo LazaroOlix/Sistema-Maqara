@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
@@ -39,6 +38,8 @@ import {
   Tooltip, 
   ResponsiveContainer
 } from 'recharts';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 import { Client, InventoryItem, ServiceOrder, OrderStatus, PartReminder, PartReminderStatus } from './types';
 import { generateClientMessage } from './services/geminiService';
 
@@ -92,12 +93,6 @@ export default function App() {
   const [clientSearch, setClientSearch] = useState('');
   const [showClientResults, setShowClientResults] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState('');
-
-  const [aiMessage, setAiMessage] = useState<string>('');
-  
-  // Estados de Impressão
-  const [printType, setPrintType] = useState<'os' | 'client_history' | 'inventory' | null>(null);
-  const [clientToPrint, setClientToPrint] = useState<Client | null>(null);
 
   // Memos
   const filteredClients = useMemo(() => {
@@ -156,7 +151,6 @@ export default function App() {
   const handleDeleteReminder = (id: string) => { if (window.confirm('Excluir este lembrete?')) updateState('reminders', reminders.filter(r => r.id !== id)); };
   const handleUpdateReminderStatus = (id: string, status: PartReminderStatus) => { updateState('reminders', reminders.map(r => r.id === id ? { ...r, status } : r)); };
 
-  // Fix: Added handleExportBackup to export app data as JSON for security and backup purposes
   const handleExportBackup = () => {
     const dataStr = JSON.stringify(appData, null, 2);
     const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
@@ -167,7 +161,6 @@ export default function App() {
     linkElement.click();
   };
 
-  // Fix: Added handleImportBackup to allow importing data from a JSON backup file
   const handleImportBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -217,7 +210,6 @@ export default function App() {
     }
   };
 
-  // Fix: Added handleAddPartToDraft to manage adding parts from inventory to the temporary order edit state
   const handleAddPartToDraft = (itemId: string, qty: number) => {
     if (!editingOrder) return;
     const item = inventory.find(i => i.id === itemId);
@@ -243,7 +235,6 @@ export default function App() {
     });
   };
 
-  // Fix: Added handleRemovePartFromDraft to manage removing parts from the temporary order edit state
   const handleRemovePartFromDraft = (itemId: string) => {
     if (!editingOrder) return;
     const currentParts = (editingOrder.partsUsed || []).filter(p => p.inventoryItemId !== itemId);
@@ -256,94 +247,143 @@ export default function App() {
     });
   };
 
-  // Funções de Impressão
-  const handlePrintOS = (os: ServiceOrder) => {
+  // Funções de Impressão e Geração de PDF
+  const handlePrintOS = async (os: ServiceOrder) => {
     const client = clients.find(c => c.id === os.clientId);
-    const printWindow = document.getElementById('print-area');
-    if (!printWindow) return;
+    const printArea = document.getElementById('print-area');
+    if (!printArea) return;
 
-    printWindow.innerHTML = `
-      <div class="p-8 font-sans text-slate-900 bg-white">
-        <div class="flex justify-between items-start border-b-2 border-slate-900 pb-6 mb-8">
+    // Configura o print-area para ser capturado pelo html2canvas (invisível ao usuário)
+    printArea.style.display = 'block';
+    printArea.style.position = 'fixed';
+    printArea.style.left = '-5000px';
+    printArea.style.top = '0';
+    printArea.style.width = '210mm'; // Largura A4
+
+    printArea.innerHTML = `
+      <div style="padding: 40px; font-family: 'Inter', sans-serif; color: #0f172a; background: white; width: 210mm; min-height: 297mm; box-sizing: border-box;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #000; padding-bottom: 24px; margin-bottom: 32px;">
           <div>
-            <h1 class="text-3xl font-black text-red-600">MAQARA</h1>
-            <p class="text-xs font-bold uppercase tracking-widest text-slate-500">Assistência Técnica de Impressoras</p>
+            <h1 style="font-size: 32px; font-weight: 900; color: #dc2626; margin: 0; letter-spacing: -1px;">MAQARA</h1>
+            <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #64748b; margin-top: 4px;">Gestão de Assistência Técnica</p>
           </div>
-          <div class="text-right">
-            <h2 class="text-xl font-black">ORDEM DE SERVIÇO</h2>
-            <p class="text-lg font-black text-red-600">#${os.id}</p>
-            <p class="text-xs font-medium">${new Date(os.createdAt).toLocaleDateString()} ${new Date(os.createdAt).toLocaleTimeString()}</p>
+          <div style="text-align: right;">
+            <h2 style="font-size: 20px; font-weight: 900; margin: 0;">ORDEM DE SERVIÇO</h2>
+            <p style="font-size: 18px; font-weight: 900; color: #dc2626; margin: 4px 0;">#${os.id}</p>
+            <p style="font-size: 12px; font-weight: 600;">Data: ${new Date(os.createdAt).toLocaleDateString()}</p>
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-8 mb-8">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-bottom: 32px;">
           <div>
-            <h3 class="text-[10px] font-black uppercase text-slate-400 mb-2 border-b">Dados do Cliente</h3>
-            <p class="font-bold">${client?.name || 'Cliente não cadastrado'}</p>
-            <p class="text-sm">Tel: ${client?.phone || 'N/A'}</p>
-            <p class="text-sm">Email: ${client?.email || 'N/A'}</p>
+            <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Dados do Cliente</h3>
+            <p style="font-size: 14px; font-weight: 700; margin: 0;">${client?.name || 'Cliente N/A'}</p>
+            <p style="font-size: 12px; margin: 4px 0;">Tel: ${client?.phone || 'N/A'}</p>
+            <p style="font-size: 12px; margin: 0;">Email: ${client?.email || 'N/A'}</p>
           </div>
           <div>
-            <h3 class="text-[10px] font-black uppercase text-slate-400 mb-2 border-b">Equipamento</h3>
-            <p class="font-bold">${os.printerModel}</p>
-            <p class="text-sm">Série: ${os.serialNumber || 'N/A'}</p>
-            <p class="text-sm">Prioridade: ${os.priority}</p>
+            <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Equipamento</h3>
+            <p style="font-size: 14px; font-weight: 700; margin: 0;">${os.printerModel}</p>
+            <p style="font-size: 12px; margin: 4px 0;">Série: ${os.serialNumber || 'N/A'}</p>
+            <p style="font-size: 12px; margin: 0;">Prioridade: ${os.priority}</p>
           </div>
         </div>
 
-        <div class="mb-8">
-          <h3 class="text-[10px] font-black uppercase text-slate-400 mb-2 border-b">Relato do Problema</h3>
-          <p class="text-sm p-4 bg-slate-50 border rounded-lg italic">"${os.problemDescription}"</p>
+        <div style="margin-bottom: 32px;">
+          <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Relato do Problema</h3>
+          <p style="font-size: 13px; font-style: italic; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin: 0;">"${os.problemDescription}"</p>
         </div>
 
-        <div class="mb-8">
-          <h3 class="text-[10px] font-black uppercase text-slate-400 mb-2 border-b">Diagnóstico e Serviço Realizado</h3>
-          <p class="text-sm p-4 bg-slate-50 border rounded-lg">${os.diagnosis || 'Serviço em andamento.'}</p>
+        <div style="margin-bottom: 32px;">
+          <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Diagnóstico Técnico</h3>
+          <p style="font-size: 13px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin: 0; min-height: 80px;">${os.diagnosis || 'Em análise técnica.'}</p>
         </div>
 
-        <div class="mb-8">
-          <h3 class="text-[10px] font-black uppercase text-slate-400 mb-2 border-b">Peças e Materiais</h3>
-          <table class="w-full text-sm">
+        <div style="margin-bottom: 32px;">
+          <h3 style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px;">Peças Utilizadas</h3>
+          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
             <thead>
-              <tr class="bg-slate-100">
-                <th class="p-2 text-left">Item</th>
-                <th class="p-2 text-center">Qtd</th>
-                <th class="p-2 text-right">Unitário</th>
-                <th class="p-2 text-right">Subtotal</th>
+              <tr style="background: #f1f5f9; text-align: left;">
+                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Item</th>
+                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: center;">Qtd</th>
+                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: right;">V. Unit.</th>
+                <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: right;">Total</th>
               </tr>
             </thead>
             <tbody>
               ${(os.partsUsed || []).map(p => `
-                <tr class="border-b">
-                  <td class="p-2">${p.name}</td>
-                  <td class="p-2 text-center">${p.quantity}</td>
-                  <td class="p-2 text-right">R$ ${p.unitPrice.toFixed(2)}</td>
-                  <td class="p-2 text-right font-bold">R$ ${(p.quantity * p.unitPrice).toFixed(2)}</td>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 10px;">${p.name}</td>
+                  <td style="padding: 10px; text-align: center;">${p.quantity}</td>
+                  <td style="padding: 10px; text-align: right;">R$ ${p.unitPrice.toFixed(2)}</td>
+                  <td style="padding: 10px; text-align: right; font-weight: 700;">R$ ${(p.quantity * p.unitPrice).toFixed(2)}</td>
                 </tr>
               `).join('')}
+              ${(os.partsUsed || []).length === 0 ? '<tr><td colspan="4" style="padding: 20px; text-align: center; color: #94a3b8;">Nenhuma peça utilizada.</td></tr>' : ''}
             </tbody>
           </table>
         </div>
 
-        <div class="flex justify-end mb-12">
-          <div class="w-64 space-y-2 p-4 bg-slate-50 border-2 border-slate-900 rounded-xl">
-            <div class="flex justify-between text-xs font-bold"><span>Mão de Obra:</span> <span>R$ ${os.laborCost.toFixed(2)}</span></div>
-            <div class="flex justify-between text-xs font-bold"><span>Total Peças:</span> <span>R$ ${os.partsCost.toFixed(2)}</span></div>
-            <div class="flex justify-between text-xl font-black pt-2 border-t border-slate-900 text-red-600"><span>TOTAL:</span> <span>R$ ${os.totalCost.toFixed(2)}</span></div>
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 40px; margin-bottom: 80px;">
+          <div style="font-size: 12px; font-weight: 700; padding: 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+             Status: <span style="color: #dc2626; text-transform: uppercase;">${os.status}</span>
+          </div>
+          <div style="width: 250px; padding: 16px; background: #f1f5f9; border: 2px solid #0f172a; border-radius: 12px;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;"><span>Mão de Obra:</span> <span>R$ ${os.laborCost.toFixed(2)}</span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #cbd5e1;"><span>Subtotal Peças:</span> <span>R$ ${os.partsCost.toFixed(2)}</span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 20px; font-weight: 900; color: #dc2626;"><span>TOTAL:</span> <span>R$ ${os.totalCost.toFixed(2)}</span></div>
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-20 pt-10">
-          <div class="text-center border-t-2 border-slate-900 pt-2">
-            <p class="text-[10px] font-black uppercase">Responsável Técnico</p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 60px;">
+          <div style="text-align: center; border-top: 1px solid #0f172a; padding-top: 8px;">
+            <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; margin: 0;">Assinatura do Técnico</p>
           </div>
-          <div class="text-center border-t-2 border-slate-900 pt-2">
-            <p class="text-[10px] font-black uppercase">Assinatura do Cliente</p>
+          <div style="text-align: center; border-top: 1px solid #0f172a; padding-top: 8px;">
+            <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; margin: 0;">Assinatura do Cliente</p>
           </div>
+        </div>
+        
+        <div style="margin-top: 60px; text-align: center; font-size: 9px; color: #94a3b8;">
+           MaqAra Manager - Sistema Profissional de Gestão de Assistência Técnica
         </div>
       </div>
     `;
-    window.print();
+
+    try {
+      // Pequeno delay para garantir que os estilos internos sejam processados
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const canvas = await html2canvas(printArea, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+      
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      
+      const pdfUrl = pdf.output('bloburl');
+      window.open(pdfUrl, '_blank');
+      
+    } catch (error) {
+      console.error('Falha ao gerar PDF:', error);
+      // Fallback para impressão do sistema
+      window.print();
+    } finally {
+      printArea.style.display = 'none';
+      printArea.innerHTML = '';
+    }
   };
 
   const handlePrintClientHistory = (client: Client) => {
@@ -659,7 +699,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Modais omitidos para brevidade, usar SaaSModal padrão */}
+      {/* Modais */}
       <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova OS">
         <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); if (!selectedClientId) return; const newOrder: ServiceOrder = { id: `OS-${Math.floor(1000 + Math.random() * 9000)}`, clientId: selectedClientId, printerModel: formData.get('printerModel') as string, serialNumber: formData.get('serialNumber') as string, problemDescription: formData.get('problemDescription') as string, status: OrderStatus.PENDING, history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Recepção' }], priority: 'Normal', laborCost: 0, partsCost: 0, totalCost: 0, partsUsed: [], createdAt: new Date(), updatedAt: new Date() }; updateState('orders', [newOrder, ...orders]); setIsOrderModalOpen(false); setClientSearch(''); setSelectedClientId(''); }} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
