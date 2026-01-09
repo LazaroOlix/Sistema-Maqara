@@ -1,38 +1,30 @@
 <!DOCTYPE html>
-<html>
-<body>
-  <h1>PrintTech</h1>
-
-  <input id="nome" placeholder="Nome do cliente" />
-  <button onclick="add()">Adicionar</button>
-
-  <ul id="lista"></ul>
-
-  <script>
-    const sqlite3 = require("sqlite3").verbose();
-    const { remote } = require("electron");
-    const path = require("path");
-
-    const dbPath = path.join(
-      remote.app.getPath("userData"),
-      "printtech.db"
-    );
-
-    const db = new sqlite3.Database(dbPath);
-
-    function add() {
-      const nome = document.getElementById("nome").value;
-      db.run("INSERT INTO clientes (nome) VALUES (?)", [nome], load);
-    }
-
-    function load() {
-      db.all("SELECT * FROM clientes", (err, rows) => {
-        document.getElementById("lista").innerHTML =
-          rows.map(r => `<li>${r.nome}</li>`).join("");
-      });
-    }
-
-    load();
-  </script>
-</body>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PrintTech Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
+    "recharts": "https://esm.sh/recharts@^3.6.0"
+  }
+}
+</script>
+</head>
+  <body class="bg-slate-50 text-slate-900 antialiased">
+    <div id="root"></div>
+  </body>
 </html>
