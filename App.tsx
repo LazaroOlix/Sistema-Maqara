@@ -88,6 +88,7 @@ export default function App() {
     } catch { return []; }
   });
 
+  // Persistence effects
   useEffect(() => { localStorage.setItem('maqara_orders', JSON.stringify(orders)); }, [orders]);
   useEffect(() => { localStorage.setItem('maqara_inventory', JSON.stringify(inventory)); }, [inventory]);
   useEffect(() => { localStorage.setItem('maqara_clients', JSON.stringify(clients)); }, [clients]);
@@ -114,8 +115,9 @@ export default function App() {
   const [printType, setPrintType] = useState<'client_individual' | 'client_general' | 'inventory' | 'os_detail' | null>(null);
   const [orderToPrint, setOrderToPrint] = useState<ServiceOrder | null>(null);
 
+  // Memos for performance and safety
   const filteredClients = useMemo(() => {
-    if (!clientSearch) return [];
+    if (!clientSearch || !Array.isArray(clients)) return [];
     return clients.filter(c => c.name?.toLowerCase().includes(clientSearch.toLowerCase()));
   }, [clientSearch, clients]);
 
@@ -127,9 +129,9 @@ export default function App() {
     };
     if (!Array.isArray(partReminders)) return [];
     return [...partReminders].sort((a, b) => {
-      if (statusOrder[a.status] !== statusOrder[b.status]) {
-        return (statusOrder[a.status] ?? 0) - (statusOrder[b.status] ?? 0);
-      }
+      const orderA = statusOrder[a.status] ?? 0;
+      const orderB = statusOrder[b.status] ?? 0;
+      if (orderA !== orderB) return orderA - orderB;
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
   }, [partReminders]);
@@ -143,14 +145,15 @@ export default function App() {
   }, [selectedOrder]);
 
   const stats = useMemo(() => {
-    const revenue = orders.filter(o => o.status === OrderStatus.DELIVERED || o.status === OrderStatus.READY).reduce((acc, curr) => acc + (curr.totalCost || 0), 0);
-    const pending = orders.filter(o => o.status !== OrderStatus.DELIVERED).length;
-    const lowStock = inventory.filter(i => i.quantity <= (i.minStock || 0)).length;
-    const pendingReminders = partReminders.filter(r => r.status === PartReminderStatus.PENDING).length;
+    const revenue = orders?.filter(o => o.status === OrderStatus.DELIVERED || o.status === OrderStatus.READY).reduce((acc, curr) => acc + (curr.totalCost || 0), 0) || 0;
+    const pending = orders?.filter(o => o.status !== OrderStatus.DELIVERED).length || 0;
+    const lowStock = inventory?.filter(i => i.quantity <= (i.minStock || 0)).length || 0;
+    const pendingReminders = partReminders?.filter(r => r.status === PartReminderStatus.PENDING).length || 0;
     return { revenue, pending, lowStock, pendingReminders };
   }, [orders, inventory, partReminders]);
 
   const chartData = useMemo(() => {
+    if (!Array.isArray(orders)) return [];
     const counts = orders.reduce((acc, order) => { 
       const status = order.status || 'Outro';
       acc[status] = (acc[status] || 0) + 1; 
@@ -159,6 +162,7 @@ export default function App() {
     return Object.keys(counts).map(key => ({ name: key, value: counts[key] }));
   }, [orders]);
 
+  // Actions
   const handleDeleteClient = (id: string) => { if (window.confirm('Excluir este cliente?')) setClients(prev => prev.filter(c => c.id !== id)); };
   const handleDeleteOrder = (id: string, e?: React.MouseEvent) => { if (e) e.stopPropagation(); if (window.confirm('Excluir esta OS permanentemente?')) setOrders(prev => prev.filter(o => o.id !== id)); };
   const handleDeleteInventoryItem = (id: string) => { if (window.confirm('Remover do estoque?')) setInventory(prev => prev.filter(i => i.id !== id)); };
@@ -184,9 +188,9 @@ export default function App() {
     if (!editingOrder) return;
     const item = inventory.find(i => i.id === itemId);
     if (!item) return;
-    const alreadyUsed = editingOrder.partsUsed.find(p => p.inventoryItemId === itemId)?.quantity || 0;
+    const alreadyUsed = editingOrder.partsUsed?.find(p => p.inventoryItemId === itemId)?.quantity || 0;
     if (item.quantity < alreadyUsed + qty) { alert('Estoque insuficiente!'); return; }
-    const newParts = [...editingOrder.partsUsed];
+    const newParts = [...(editingOrder.partsUsed || [])];
     const idx = newParts.findIndex(p => p.inventoryItemId === itemId);
     if (idx > -1) newParts[idx].quantity += qty; else newParts.push({ inventoryItemId: itemId, name: item.name, quantity: qty, unitPrice: item.sellPrice });
     const cost = newParts.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0);
@@ -195,7 +199,7 @@ export default function App() {
 
   const handleRemovePartFromDraft = (itemId: string) => {
     if (!editingOrder) return;
-    const newParts = editingOrder.partsUsed.filter(p => p.inventoryItemId !== itemId);
+    const newParts = (editingOrder.partsUsed || []).filter(p => p.inventoryItemId !== itemId);
     const cost = newParts.reduce((acc, p) => acc + (p.quantity * p.unitPrice), 0);
     setEditingOrder({ ...editingOrder, partsUsed: newParts, partsCost: cost, totalCost: editingOrder.laborCost + cost });
   };
@@ -204,8 +208,8 @@ export default function App() {
     if (!editingOrder || !selectedOrder) return;
     setIsSaving(true);
     const updatedInv = [...inventory];
-    selectedOrder.partsUsed.forEach(p => { const item = updatedInv.find(i => i.id === p.inventoryItemId); if (item) item.quantity += p.quantity; });
-    editingOrder.partsUsed.forEach(p => { const item = updatedInv.find(i => i.id === p.inventoryItemId); if (item) item.quantity -= p.quantity; });
+    selectedOrder.partsUsed?.forEach(p => { const item = updatedInv.find(i => i.id === p.inventoryItemId); if (item) item.quantity += p.quantity; });
+    editingOrder.partsUsed?.forEach(p => { const item = updatedInv.find(i => i.id === p.inventoryItemId); if (item) item.quantity -= p.quantity; });
     const updatedOrder = { ...editingOrder, updatedAt: new Date() };
     setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
     setInventory(updatedInv);
@@ -216,9 +220,9 @@ export default function App() {
   };
 
   const handleUpdateStatus = async (id: string, newStatus: OrderStatus) => {
-    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus, updatedAt: new Date(), history: [{ status: newStatus, date: new Date(), user: 'Técnico' }, ...o.history] } : o));
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus, updatedAt: new Date(), history: [{ status: newStatus, date: new Date(), user: 'Técnico' }, ...(o.history || [])] } : o));
     if (selectedOrder?.id === id) {
-      setSelectedOrder({ ...selectedOrder, status: newStatus, updatedAt: new Date(), history: [{ status: newStatus, date: new Date(), user: 'Técnico' }, ...selectedOrder.history] });
+      setSelectedOrder({ ...selectedOrder, status: newStatus, updatedAt: new Date(), history: [{ status: newStatus, date: new Date(), user: 'Técnico' }, ...(selectedOrder.history || [])] });
     }
   };
 
@@ -277,8 +281,10 @@ export default function App() {
               </h1>
             </div>
             <div className="flex gap-3">
-              {activeTab === 'orders' && <button onClick={() => setIsOrderModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Nova OS</button>}
-              {activeTab === 'reminders' && <button onClick={() => setIsReminderModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Lembrete</button>}
+              {activeTab === 'orders' && <button onClick={() => { setClientSearch(''); setSelectedClientId(''); setIsOrderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Nova OS</button>}
+              {activeTab === 'reminders' && <button onClick={() => { setEditingReminder(null); setIsReminderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Lembrete</button>}
+              {activeTab === 'clients' && <button onClick={() => setIsClientModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Cliente</button>}
+              {activeTab === 'inventory' && <button onClick={() => setIsInventoryModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Item</button>}
             </div>
           </div>
 
@@ -314,6 +320,79 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'orders' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                  <tr><th className="p-6">OS / Máquina</th><th className="p-6">Cliente</th><th className="p-6">Total</th><th className="p-6">Status</th><th className="p-6 text-right">Ações</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {orders?.length === 0 ? (
+                    <tr><td colSpan={5} className="p-20 text-center text-slate-400">Nenhuma ordem de serviço cadastrada.</td></tr>
+                  ) : orders?.map(o => (
+                    <tr key={o.id} onClick={() => setSelectedOrder(o)} className="hover:bg-red-50/20 cursor-pointer group transition-colors">
+                      <td className="p-6"><div className="font-black text-red-600">#{o.id}</div><div className="text-sm text-slate-500">{o.printerModel}</div></td>
+                      <td className="p-6 font-bold">{clients?.find(c => c.id === o.clientId)?.name || 'N/A'}</td>
+                      <td className="p-6 font-black text-slate-900">R$ {(o.totalCost || 0).toFixed(2)}</td>
+                      <td className="p-6"><StatusBadge status={o.status}/></td>
+                      <td className="p-6 text-right"><div className="flex justify-end gap-2"><button onClick={(e) => handleDeleteOrder(o.id, e)} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button><ChevronRight size={20} className="text-slate-300 group-hover:text-red-600 inline"/></div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === 'inventory' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                  <tr><th className="p-6">Peça</th><th className="p-6">Saldo</th><th className="p-6">Venda</th><th className="p-6 text-center">Status</th><th className="p-6 text-right">Ações</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {inventory?.length === 0 ? (
+                    <tr><td colSpan={5} className="p-20 text-center text-slate-400">Nenhum item no estoque.</td></tr>
+                  ) : inventory?.map(i => (
+                    <tr key={i.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="p-6 font-bold">{i.name}</td>
+                      <td className="p-6 font-black">{i.quantity} un</td>
+                      <td className="p-6 font-bold text-slate-600">R$ {(i.sellPrice || 0).toFixed(2)}</td>
+                      <td className="p-6 text-center">
+                        {i.quantity <= (i.minStock || 0) ? <span className="text-red-600 font-black text-[10px]">REPOR</span> : <span className="text-green-600 font-black text-[10px]">OK</span>}
+                      </td>
+                      <td className="p-6 text-right">
+                        <button onClick={() => handleDeleteInventoryItem(i.id)} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === 'clients' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                  <tr><th className="p-6">Nome do Cliente</th><th className="p-6">WhatsApp</th><th className="p-6 text-right">Ações</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {clients?.length === 0 ? (
+                    <tr><td colSpan={3} className="p-20 text-center text-slate-400">Nenhum cliente cadastrado.</td></tr>
+                  ) : clients?.map(c => (
+                    <tr key={c.id} className="hover:bg-slate-50 transition-colors group">
+                      <td className="p-6 font-black">{c.name}</td>
+                      <td className="p-6 font-bold text-slate-600">{c.phone}</td>
+                      <td className="p-6 text-right flex justify-end gap-3">
+                        <button onClick={() => handleDeleteClient(c.id)} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {activeTab === 'reminders' && (
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
               <table className="w-full text-left">
@@ -321,7 +400,9 @@ export default function App() {
                   <tr><th className="p-6">Peça</th><th className="p-6">Qtd</th><th className="p-6">Data</th><th className="p-6">Status</th><th className="p-6 text-right">Ações</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {sortedReminders.map(r => (
+                  {sortedReminders.length === 0 ? (
+                    <tr><td colSpan={5} className="p-20 text-center text-slate-400">Nenhum lembrete cadastrado.</td></tr>
+                  ) : sortedReminders.map(r => (
                     <tr key={r.id} className={`hover:bg-slate-50 transition-colors ${r.status === PartReminderStatus.RECEIVED ? 'opacity-50' : ''}`}>
                       <td className="p-6"><div className="font-black">{r.partName}</div>{r.notes && <div className="text-[10px] text-slate-500">{r.notes}</div>}</td>
                       <td className="p-6 font-black">{r.quantity}</td>
@@ -341,13 +422,117 @@ export default function App() {
               </table>
             </div>
           )}
-          
-          {/* Outras tabelas omitidas para brevidade, mas devem seguir o mesmo padrão seguro */}
         </div>
       </main>
 
-      {/* Modais omitidos para brevidade, garantir que usem SaaSModal */}
-      
+      {/* Drawer Detalhes OS */}
+      {selectedOrder && editingOrder && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-end print:hidden">
+          <div className="w-full max-w-2xl bg-white h-full shadow-2xl overflow-y-auto animate-slide-in-right flex flex-col">
+            <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-4">
+                <div className="bg-slate-50 p-2 rounded-xl"><img src={LOGO_IMAGE} alt="Logo" className="h-10 w-auto object-contain" /></div>
+                <div><h2 className="text-xl font-black text-slate-900 uppercase">OS #{editingOrder.id}</h2><p className="text-slate-500 font-medium text-xs">{editingOrder.printerModel}</p></div>
+              </div>
+              <button onClick={() => { setSelectedOrder(null); }} className="p-3 hover:bg-slate-100 rounded-full transition-colors text-slate-400"><X size={24}/></button>
+            </div>
+            <div className="p-8 space-y-8 flex-1">
+              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                <div className="flex flex-wrap gap-2">
+                  {Object.values(OrderStatus).map(s => (
+                    <button key={s} onClick={() => handleUpdateStatus(editingOrder.id, s)} className={`px-4 py-2 rounded-xl text-[10px] font-black border transition-all ${editingOrder.status === s ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-600 border-slate-200'}`}>{s}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="border border-red-100 rounded-[32px] overflow-hidden bg-white shadow-sm">
+                <div className="p-8 space-y-6">
+                  <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Relatório Técnico</label><textarea value={editingOrder.diagnosis || ''} onChange={(e) => setEditingOrder({...editingOrder, diagnosis: e.target.value})} rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl" placeholder="Diagnóstico..." /></div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Peças</label>
+                    <div className="flex gap-2">
+                      <select id="part-select" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs"><option value="">Peça...</option>{inventory?.filter(i => i.quantity > 0).map(i => ( <option key={i.id} value={i.id}>{i.name} ({i.quantity})</option> ))}</select>
+                      <button onClick={() => { const sel = document.getElementById('part-select') as HTMLSelectElement; if (sel.value) handleAddPartToDraft(sel.value, 1); }} className="bg-red-600 text-white px-4 rounded-xl"><Plus size={20}/></button>
+                    </div>
+                  </div>
+                  {editingOrder.partsUsed?.length > 0 && (
+                    <div className="space-y-2">{editingOrder.partsUsed.map((p, idx) => ( <div key={idx} className="flex justify-between items-center bg-white border p-4 rounded-2xl shadow-sm"><div><p className="font-bold text-sm">{p.name}</p><p className="text-[10px] text-slate-400 uppercase">{p.quantity} un</p></div><button onClick={() => handleRemovePartFromDraft(p.inventoryItemId)} className="text-slate-300"><Trash2 size={16}/></button></div> ))}</div>
+                  )}
+                  <div className="flex items-center justify-between pt-4 border-t"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Mão de Obra</label><input type="number" step="0.01" value={editingOrder.laborCost || ''} onChange={(e) => { const val = parseFloat(e.target.value) || 0; setEditingOrder({...editingOrder, laborCost: val, totalCost: val + editingOrder.partsCost}); }} className="w-32 p-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-right" /></div>
+                  <div className="bg-slate-900 p-6 rounded-3xl text-white flex justify-between items-center"><div className="text-left"><p className="text-[10px] uppercase font-black">Subtotal</p><p className="text-lg font-bold">R$ {(editingOrder.partsCost || 0).toFixed(2)}</p></div><div className="text-right"><p className="text-[10px] uppercase font-black text-red-500">Total</p><p className="text-2xl font-black">R$ {(editingOrder.totalCost || 0).toFixed(2)}</p></div></div>
+                  <button onClick={handleSaveOrderChanges} disabled={isSaving} className={`w-full py-4 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 ${saveSuccess ? 'bg-green-600 text-white' : 'bg-red-600 text-white shadow-xl'}`}>{isSaving ? <RefreshCcw className="animate-spin" size={20}/> : saveSuccess ? <CheckCircle size={20}/> : <Save size={20}/>}{saveSuccess ? 'Salvo!' : 'Salvar Alterações'}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modals */}
+      <SaaSModal isOpen={isOrderModalOpen} onClose={() => setIsOrderModalOpen(false)} title="Nova Ordem de Serviço">
+        <form onSubmit={(e) => { 
+          e.preventDefault(); 
+          const formData = new FormData(e.currentTarget); 
+          if (!selectedClientId) { alert('Selecione um cliente.'); return; } 
+          const newOrder: ServiceOrder = { 
+            id: `OS-${Math.floor(1000 + Math.random() * 9000)}`, 
+            clientId: selectedClientId, 
+            printerModel: formData.get('printerModel') as string, 
+            serialNumber: formData.get('serialNumber') as string, 
+            problemDescription: formData.get('problemDescription') as string, 
+            status: OrderStatus.PENDING, 
+            history: [{ status: OrderStatus.PENDING, date: new Date(), user: 'Recepção', description: 'Entrada.' }], 
+            priority: formData.get('priority') as any, 
+            laborCost: 0, 
+            partsCost: 0, 
+            totalCost: 0, 
+            partsUsed: [], 
+            createdAt: new Date(), 
+            updatedAt: new Date() 
+          }; 
+          setOrders(prev => [newOrder, ...prev]); 
+          setIsOrderModalOpen(false); 
+          setClientSearch(''); 
+          setSelectedClientId(''); 
+        }} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1 relative">
+              <label className="text-[10px] font-black text-slate-400 uppercase">Cliente (Buscar)</label>
+              <div className="relative">
+                <input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) setSelectedClientId(''); }} onFocus={() => setShowClientResults(true)} className="w-full p-4 pl-10 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome..." required={!selectedClientId} />
+                <Search className="absolute left-3 top-4 text-slate-400" size={18}/>
+              </div>
+              {showClientResults && filteredClients.length > 0 && (
+                <div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl max-h-48 overflow-y-auto">
+                  {filteredClients.map(c => (<div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b last:border-0">{c.name}</div>))}
+                </div>
+              )}
+            </div>
+            <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Prioridade</label><select name="priority" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold"><option value="Normal">Normal</option><option value="Baixa">Baixa</option><option value="Alta">Alta</option></select></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><input name="printerModel" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Modelo" required /><input name="serialNumber" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="N/S" /></div>
+          <textarea name="problemDescription" rows={3} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Defeito..." required />
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl uppercase tracking-widest">Abrir OS</button>
+        </form>
+      </SaaSModal>
+
+      <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Novo Cliente">
+        <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); setClients(prev => [...prev, { id: Date.now().toString(), name: formData.get('name') as string, phone: formData.get('phone') as string, email: formData.get('email') as string }]); setIsClientModalOpen(false); }} className="space-y-6">
+          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome" required />
+          <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp" required />
+          <input name="email" type="email" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Email" />
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Confirmar</button>
+        </form>
+      </SaaSModal>
+
+      <SaaSModal isOpen={isInventoryModalOpen} onClose={() => setIsInventoryModalOpen(false)} title="Novo Item de Estoque">
+        <form onSubmit={(e) => { e.preventDefault(); const formData = new FormData(e.currentTarget); setInventory(prev => [...prev, { id: Date.now().toString(), name: formData.get('name') as string, quantity: parseInt(formData.get('quantity') as string), minStock: parseInt(formData.get('minStock') as string), costPrice: parseFloat(formData.get('costPrice') as string), sellPrice: parseFloat(formData.get('sellPrice') as string) }]); setIsInventoryModalOpen(false); }} className="space-y-6">
+          <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
+          <div className="grid grid-cols-2 gap-4"><input name="quantity" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Qtd" required /><input name="minStock" type="number" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Mínimo" required /></div>
+          <div className="grid grid-cols-2 gap-4"><input name="costPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Custo" required /><input name="sellPrice" type="number" step="0.01" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Preço Venda" required /></div>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Salvar</button>
+        </form>
+      </SaaSModal>
+
       <SaaSModal isOpen={isReminderModalOpen} onClose={() => setIsReminderModalOpen(false)} title="Lembrete de Peça">
         <form onSubmit={handleSaveReminder} className="space-y-6">
           <input name="partName" type="text" defaultValue={editingReminder?.partName || ''} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome da Peça" required />
@@ -356,6 +541,8 @@ export default function App() {
           <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl uppercase tracking-widest shadow-xl">Salvar</button>
         </form>
       </SaaSModal>
+
+      <style>{` @media print { body { -webkit-print-color-adjust: exact; background: white; font-size: 10pt; } .print-hidden { display: none !important; } } `}</style>
     </div>
   );
 }
@@ -381,6 +568,11 @@ function DashboardStat({label, value, icon, trend, critical}: any) {
 function ReminderStatusBadge({ status }: { status: PartReminderStatus }) {
   const colors: any = { [PartReminderStatus.PENDING]: 'bg-red-50 text-red-700', [PartReminderStatus.ORDERED]: 'bg-blue-50 text-blue-700', [PartReminderStatus.RECEIVED]: 'bg-green-50 text-green-700' };
   return <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase border ${colors[status] || 'bg-slate-50'}`}>{status}</span>;
+}
+
+function StatusBadge({ status }: { status: OrderStatus }) {
+  const colors: any = { [OrderStatus.PENDING]: 'bg-amber-100 text-amber-800', [OrderStatus.DIAGNOSING]: 'bg-red-50 text-red-700', [OrderStatus.WAITING_APPROVAL]: 'bg-slate-100 text-slate-700', [OrderStatus.IN_REPAIR]: 'bg-blue-100 text-blue-800', [OrderStatus.READY]: 'bg-green-100 text-green-800', [OrderStatus.DELIVERED]: 'bg-slate-800 text-white' };
+  return <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase border ${colors[status] || 'bg-gray-100'}`}>{status}</span>;
 }
 
 function SaaSModal({isOpen, onClose, title, children}: any) {
