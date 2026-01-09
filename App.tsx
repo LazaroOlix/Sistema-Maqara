@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
@@ -49,8 +50,8 @@ import {
 import { Client, InventoryItem, ServiceOrder, OrderStatus, StatusHistoryEntry, UsedPart } from './types';
 import { getPrinterDiagnosis, generateClientMessage } from './services/geminiService';
 
-// Caminho para a logo fornecida pelo usuário
-const LOGO_IMAGE = 'https://files.oaiusercontent.com/file-2EUPq83V8SreYF9pU4jCAt?se=2025-02-12T13%3A40%3A20Z&sp=r&sv=2024-08-04&sr=b&rscc=max-age%3D604800%2C%20immutable%2C%20private&rscd=attachment%3B%20filename%3D739a2d3c-9136-4700-9e65-c7d60920f329.webp&sig=G0v3nU7PIdfK9lVf9l%2BFf6rIomW8v3G6h/h21p9H6oE%3D';
+// Caminho otimizado para Vite (o arquivo deve estar em public/logo.png)
+const LOGO_IMAGE = '/logo.png';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'inventory' | 'clients'>('dashboard');
@@ -302,7 +303,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `backup-printtech-${new Date().toISOString().split('T')[0]}.json`;
+    link.download = `backup-maqara-${new Date().toISOString().split('T')[0]}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -367,6 +368,10 @@ export default function App() {
             src={LOGO_IMAGE} 
             alt="MaqAra Logo" 
             className="h-16 w-auto object-contain"
+            onError={(e) => {
+               const target = e.target as HTMLImageElement;
+               target.src = 'https://via.placeholder.com/150x60?text=MAQARA'; // Fallback visual se a imagem não carregar
+            }}
           />
         </div>
         <nav className="flex-1 p-4 space-y-2 mt-4">
@@ -384,7 +389,7 @@ export default function App() {
           <div className="flex justify-between items-end mb-4 print:hidden">
             <div>
               <h1 className="text-3xl font-black text-slate-900 tracking-tight capitalize">{activeTab === 'dashboard' ? 'Visão Geral' : activeTab === 'orders' ? 'Ordens de Serviço' : activeTab}</h1>
-              <p className="text-slate-500 text-sm mt-1">Gestão profissional e integrada.</p>
+              <p className="text-slate-500 text-sm mt-1">Gestão profissional MaqAra.</p>
             </div>
             <div className="flex gap-3">
               {activeTab === 'orders' && (
@@ -426,8 +431,9 @@ export default function App() {
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
-                        <Pie data={chartData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={8} dataKey="value" stroke="none">
-                          {chartData.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} cornerRadius={4} />)}
+                        {/* cornerRadius should be on Pie, not Cell */}
+                        <Pie data={chartData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={8} dataKey="value" stroke="none" cornerRadius={4}>
+                          {chartData.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} />)}
                         </Pie>
                         <Tooltip />
                       </PieChart>
@@ -437,7 +443,7 @@ export default function App() {
 
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 flex flex-col">
                   <h3 className="font-black text-slate-800 flex items-center gap-2 mb-6"><Database size={18} className="text-red-600"/> Backup do Sistema</h3>
-                  <p className="text-slate-500 text-sm mb-8">Exporte seus dados regularmente para garantir a segurança da sua assistência.</p>
+                  <p className="text-slate-500 text-sm mb-8">Exporte seus dados regularmente para garantir a segurança da MaqAra.</p>
                   <div className="grid grid-cols-1 gap-4 mt-auto">
                     <button onClick={handleExportBackup} className="w-full flex items-center justify-center gap-3 bg-red-600 text-white py-4 rounded-2xl font-black hover:bg-red-700 transition-all shadow-lg shadow-red-100">
                       <Download size={20}/> Exportar Backup JSON
@@ -554,7 +560,7 @@ export default function App() {
                   <img 
                     src={LOGO_IMAGE} 
                     alt="MaqAra Logo" 
-                    className="h-14 w-auto mb-2 object-contain"
+                    className="h-16 w-auto mb-2 object-contain"
                   />
                   <p className="text-xs font-bold uppercase tracking-wider">ASSISTÊNCIA TÉCNICA EM IMPRESSORAS</p>
                 </div>
@@ -634,7 +640,7 @@ export default function App() {
             {/* Header Drawer */}
             <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
               <div className="flex items-center gap-4">
-                <div className="bg-red-100 p-2 rounded-xl">
+                <div className="bg-slate-50 p-2 rounded-xl">
                    <img src={LOGO_IMAGE} alt="MaqAra" className="h-10 w-auto object-contain" />
                 </div>
                 <div>
@@ -650,7 +656,6 @@ export default function App() {
 
             {/* Conteúdo Drawer */}
             <div className="p-8 space-y-8 flex-1">
-              
               {/* Status Section */}
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><StatusBadge status={editingOrder.status}/> Gerenciar Status</p>

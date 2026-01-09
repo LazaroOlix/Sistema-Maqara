@@ -1,15 +1,11 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// Inicialização segura conforme diretrizes
-const getAIClient = () => {
-  // O Vite substituirá process.env.API_KEY com base na config do vite.config.ts
-  const apiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
-  return new GoogleGenAI({ apiKey: apiKey || '' });
-};
+// Initialize the Gemini AI client with the API key from environment variables
+// Always use the named parameter and direct process.env.API_KEY access as per guidelines
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const getPrinterDiagnosis = async (printerModel: string, problem: string): Promise<string> => {
-  const ai = getAIClient();
   try {
     const prompt = `
       Você é um técnico especialista sênior em manutenção de impressoras.
@@ -24,11 +20,13 @@ export const getPrinterDiagnosis = async (printerModel: string, problem: string)
       Mantenha a resposta concisa em Markdown.
     `;
 
+    // Call generateContent using the correct pattern: model name and contents
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
 
+    // Access the .text property directly to get the generated content
     return response.text || "Não foi possível gerar o diagnóstico.";
   } catch (error) {
     console.error("Erro Gemini:", error);
@@ -42,7 +40,6 @@ export const generateClientMessage = async (
   status: string,
   details: string
 ): Promise<string> => {
-  const ai = getAIClient();
   try {
     const prompt = `
       Escreva uma mensagem de WhatsApp curta e profissional para um cliente de assistência técnica.
@@ -54,11 +51,13 @@ export const generateClientMessage = async (
       Não use hashtags.
     `;
 
+    // Call generateContent using the correct pattern: model name and contents
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
 
+    // Access the .text property directly to get the generated content
     return response.text || "Mensagem não gerada.";
   } catch (error) {
     console.error("Erro Gemini:", error);
