@@ -334,6 +334,79 @@ export default function App() {
     }
   };
 
+  const handlePrintReminders = async () => {
+    const printArea = document.getElementById('print-area');
+    if (!printArea) return;
+
+    printArea.style.display = 'block';
+    printArea.style.position = 'fixed';
+    printArea.style.left = '-5000px';
+    printArea.style.top = '0';
+    printArea.style.width = '210mm';
+
+    printArea.innerHTML = `
+      <div style="padding: 40px; font-family: 'Inter', sans-serif; color: #0f172a; background: white; width: 210mm; min-height: 297mm; box-sizing: border-box;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #000; padding-bottom: 24px; margin-bottom: 32px;">
+          <div>
+            <h1 style="font-size: 32px; font-weight: 900; color: #dc2626; margin: 0; letter-spacing: -1px;">MAQARA</h1>
+            <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #64748b; margin-top: 4px;">Relatório de Lembretes de Peças</p>
+          </div>
+          <div style="text-align: right;">
+            <h2 style="font-size: 18px; font-weight: 900; margin: 0;">DATA DE GERAÇÃO</h2>
+            <p style="font-size: 12px; font-weight: 600;">${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</p>
+          </div>
+        </div>
+
+        <table style="width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 40px;">
+          <thead>
+            <tr style="background: #f1f5f9; text-align: left;">
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Peça</th>
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: center;">Qtd</th>
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Observações</th>
+              <th style="padding: 10px; border-bottom: 2px solid #cbd5e1; text-align: center;">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${reminders.map(r => `
+              <tr style="border-bottom: 1px solid #f1f5f9; ${r.status === PartReminderStatus.PENDING ? 'background: #fff1f2;' : ''}">
+                <td style="padding: 10px; font-weight: 700;">${r.partName}</td>
+                <td style="padding: 10px; text-align: center;">${r.quantity}</td>
+                <td style="padding: 10px;">${r.notes || '---'}</td>
+                <td style="padding: 10px; text-align: center;">
+                  <span style="font-weight: 800; text-transform: uppercase; font-size: 9px; padding: 4px 8px; border-radius: 4px; ${
+                    r.status === PartReminderStatus.PENDING ? 'color: #be123c; background: #ffe4e6;' : 
+                    r.status === PartReminderStatus.ORDERED ? 'color: #1d4ed8; background: #dbeafe;' : 
+                    'color: #15803d; background: #dcfce7;'
+                  }">${r.status}</span>
+                </td>
+              </tr>
+            `).join('')}
+            ${reminders.length === 0 ? '<tr><td colspan="4" style="padding: 20px; text-align: center; color: #94a3b8;">Nenhum lembrete encontrado.</td></tr>' : ''}
+          </tbody>
+        </table>
+
+        <div style="margin-top: 60px; text-align: center; font-size: 9px; color: #94a3b8;">
+           MaqAra Manager - Sistema Profissional de Gestão de Assistência Técnica
+        </div>
+      </div>
+    `;
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const canvas = await html2canvas(printArea, { scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      pdf.addImage(imgData, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight());
+      window.open(pdf.output('bloburl'), '_blank');
+    } catch (err) {
+      console.error(err);
+      window.print();
+    } finally {
+      printArea.style.display = 'none';
+      printArea.innerHTML = '';
+    }
+  };
+
   const handlePrintOS = async (os: ServiceOrder) => {
     const client = clients.find(c => c.id === os.clientId);
     const printArea = document.getElementById('print-area');
@@ -551,7 +624,14 @@ export default function App() {
                   <button onClick={() => setIsInventoryModalOpen(true)} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Item</button>
                 </div>
               )}
-              {activeTab === 'reminders' && <button onClick={() => { setEditingReminder(null); setIsReminderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Lembrete</button>}
+              {activeTab === 'reminders' && (
+                <div className="flex gap-2">
+                  <button onClick={handlePrintReminders} className="p-3 bg-white text-slate-400 hover:text-red-600 border border-slate-200 rounded-xl transition-all shadow-sm">
+                    <Printer size={20}/>
+                  </button>
+                  <button onClick={() => { setEditingReminder(null); setIsReminderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Lembrete</button>
+                </div>
+              )}
             </div>
           </div>
 
