@@ -33,7 +33,8 @@ import {
   FileText,
   MinusCircle,
   ListOrdered,
-  Timer
+  Timer,
+  UserPlus
 } from 'lucide-react';
 import { 
   PieChart, 
@@ -85,6 +86,7 @@ export default function App() {
   const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
   
   const [editingReminder, setEditingReminder] = useState<PartReminder | null>(null);
+  const [editingClient, setEditingClient] = useState<Client | null>(null); 
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
   const [editingOrder, setEditingOrder] = useState<ServiceOrder | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -96,17 +98,34 @@ export default function App() {
   const [selectedMachineId, setSelectedMachineId] = useState('');
   const [clientMachinesDraft, setClientMachinesDraft] = useState<Machine[]>([]);
 
+  // Memo centralizado para Ordens de Serviço ordenadas pelo ID (número da OS)
+  const sortedOrders = useMemo(() => {
+    return [...orders].sort((a, b) => {
+      const numA = parseInt(a.id, 10);
+      const numB = parseInt(b.id, 10);
+      
+      // Ordenação principal por número (ID)
+      if (!isNaN(numA) && !isNaN(numB)) {
+        if (numA !== numB) return numA - numB;
+      } else {
+        const compareId = a.id.localeCompare(b.id, undefined, { numeric: true });
+        if (compareId !== 0) return compareId;
+      }
+      
+      // Ordenação secundária por data de criação
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+  }, [orders]);
+
   const filteredClients = useMemo(() => {
     if (!clientSearch) return [];
     return clients.filter(c => c.name?.toLowerCase().includes(clientSearch.toLowerCase()));
   }, [clientSearch, clients]);
 
-  // Fila de Orçamento: OSs Pendentes ordenadas por data de criação (antiga -> nova)
+  // Fila de Orçamento: OSs Pendentes usando o memo de ordenação estável
   const quoteQueue = useMemo(() => {
-    return orders
-      .filter(o => o.quoteStatus !== 'Orçamento concluído')
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  }, [orders]);
+    return sortedOrders.filter(o => o.quoteStatus !== 'Orçamento concluído');
+  }, [sortedOrders]);
 
   const sortedReminders = useMemo(() => {
     const statusOrder = { [PartReminderStatus.PENDING]: 0, [PartReminderStatus.ORDERED]: 1, [PartReminderStatus.RECEIVED]: 2 };
@@ -171,6 +190,20 @@ export default function App() {
     if (selectedOrder?.id === orderId) {
       setSelectedOrder(prev => prev ? { ...prev, quoteStatus: newQuoteStatus } : null);
     }
+  };
+
+  const handleEditClient = (client: Client) => {
+    setEditingClient(client);
+    setClientMachinesDraft(client.machines || []);
+    setIsClientModalOpen(true);
+  };
+
+  const handleNewOSForClient = (client: Client) => {
+    setClientSearch(client.name);
+    setSelectedClientId(client.id);
+    setSelectedMachineId('');
+    setShowClientResults(false);
+    setIsOrderModalOpen(true);
   };
 
   const handleExportBackup = () => {
@@ -456,6 +489,61 @@ export default function App() {
     } catch (error) { console.error(error); window.print(); } finally { printArea.style.display = 'none'; }
   };
 
+  const handlePrintClientHistory = (client: Client) => {
+    // Aplicada ordenação por número de OS (ID) no histórico do cliente
+    const clientOrders = orders
+      .filter(o => o.clientId === client.id)
+      .sort((a, b) => {
+        const numA = parseInt(a.id, 10);
+        const numB = parseInt(b.id, 10);
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+        if (a.id !== b.id) return a.id.localeCompare(b.id, undefined, { numeric: true });
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
+    
+    const totalSpent = clientOrders.reduce((acc, o) => acc + o.totalCost, 0);
+    const printWindow = document.getElementById('print-area');
+    if (!printWindow) return;
+
+    printWindow.innerHTML = `
+      <div class="p-8 font-sans text-slate-900 bg-white">
+        <div class="flex justify-between items-center mb-8 border-b-2 pb-4">
+          <div><h1 class="text-2xl font-black">HISTÓRICO DO CLIENTE</h1><p class="font-bold text-red-600">${client.name}</p></div>
+          <div class="text-right text-xs">Impresso em: ${new Date().toLocaleDateString()}</div>
+        </div>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-100 border-b">
+              <th class="p-2 text-left">OS</th>
+              <th class="p-2 text-left">Equipamento</th>
+              <th class="p-2 text-left">Data</th>
+              <th class="p-2 text-left">Status</th>
+              <th class="p-2 text-right">Valor</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${clientOrders.map(o => `
+              <tr class="border-b">
+                <td class="p-2 font-bold">#${o.id}</td>
+                <td class="p-2">${o.printerModel}</td>
+                <td class="p-2">${new Date(o.createdAt).toLocaleDateString()}</td>
+                <td class="p-2">${o.status}</td>
+                <td class="p-2 text-right">R$ ${o.totalCost.toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          <tfoot>
+            <tr class="bg-slate-50 font-black">
+              <td colspan="4" class="p-4 text-right uppercase">Total Acumulado:</td>
+              <td class="p-4 text-right text-lg text-red-600">R$ ${totalSpent.toFixed(2)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    `;
+    window.print();
+  };
+
   const handleAddMachineToDraft = () => {
     const typeInput = document.getElementById('machine-type') as HTMLInputElement;
     const modelInput = document.getElementById('machine-model') as HTMLInputElement;
@@ -507,7 +595,7 @@ export default function App() {
             </div>
             <div className="flex gap-3">
               {(activeTab === 'orders' || activeTab === 'queue') && <button onClick={() => { setClientSearch(''); setSelectedClientId(''); setSelectedMachineId(''); setIsOrderModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Nova OS</button>}
-              {activeTab === 'clients' && <button onClick={() => { setClientMachinesDraft([]); setIsClientModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><PlusCircle size={20}/> Novo Cliente</button>}
+              {activeTab === 'clients' && <button onClick={() => { setEditingClient(null); setClientMachinesDraft([]); setIsClientModalOpen(true); }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-xl flex items-center gap-2"><UserPlus size={20}/> Novo Cliente</button>}
               {activeTab === 'inventory' && (
                 <div className="flex gap-2">
                   <button onClick={handlePrintInventory} className="bg-white text-slate-700 border border-slate-200 px-4 py-3 rounded-xl font-bold hover:bg-slate-50 shadow-sm flex items-center gap-2"><Printer size={20}/> Relatório</button>
@@ -603,13 +691,13 @@ export default function App() {
                         <div className="flex justify-end gap-2">
                            <button 
                              onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(o.id, 'Em orçamento'); }}
-                             className="p-2 text-slate-400 hover:text-blue-600 title='Iniciar Orçamento'"
+                             className="p-2 text-slate-400 hover:text-blue-600" title='Iniciar Orçamento'
                            >
                              <Timer size={18}/>
                            </button>
                            <button 
                              onClick={(e) => { e.stopPropagation(); handleUpdateQuoteStatus(o.id, 'Orçamento concluído'); }}
-                             className="p-2 text-slate-400 hover:text-green-600 title='Concluir'"
+                             className="p-2 text-slate-400 hover:text-green-600" title='Concluir'
                            >
                              <CheckCircle size={18}/>
                            </button>
@@ -629,9 +717,9 @@ export default function App() {
                   <tr><th className="p-6">OS / Máquina</th><th className="p-6">Cliente</th><th className="p-6">Total</th><th className="p-6">Status</th><th className="p-6 text-right">Ações</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {orders?.length === 0 ? (
+                  {sortedOrders.length === 0 ? (
                     <tr><td colSpan={5} className="p-20 text-center text-slate-400 font-medium italic">Nenhuma ordem de serviço cadastrada no momento.</td></tr>
-                  ) : orders?.map(o => (
+                  ) : sortedOrders.map(o => (
                     <tr key={o.id} onClick={() => setSelectedOrder(o)} className="hover:bg-red-50/20 cursor-pointer group transition-colors">
                       <td className="p-6"><div className="font-black text-red-600">#{o.id}</div><div className="text-sm text-slate-500 font-medium">{o.printerModel}</div></td>
                       <td className="p-6 font-bold">{clients?.find(c => c.id === o.clientId)?.name || 'N/A'}</td>
@@ -686,7 +774,10 @@ export default function App() {
                       <td className="p-6 font-black">{c.name}</td>
                       <td className="p-6 font-bold text-slate-600">{c.phone}</td>
                       <td className="p-6 font-bold text-xs">{(c.machines || []).length} cadastradas</td>
-                      <td className="p-6 text-right flex justify-end gap-3">
+                      <td className="p-6 text-right flex justify-end gap-2 items-center">
+                        <button onClick={() => handleNewOSForClient(c)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg flex items-center gap-1 text-[10px] font-black uppercase"><PlusCircle size={16}/> Nova OS</button>
+                        <button onClick={() => handleEditClient(c)} className="p-2 text-slate-400 hover:text-slate-900 flex items-center gap-1 text-[10px] font-black uppercase"><Edit2 size={16}/> Editar</button>
+                        <button onClick={() => handlePrintClientHistory(c)} className="p-2 text-slate-400 hover:text-blue-600 flex items-center gap-1 text-[10px] font-black uppercase"><History size={16}/> Histórico</button>
                         <button onClick={() => handleDeleteClient(c.id)} className="p-2 text-slate-300 hover:text-red-600"><Trash2 size={18}/></button>
                       </td>
                     </tr>
@@ -812,7 +903,7 @@ export default function App() {
             serialNumber: machine?.serialNumber || 'N/S não especificado', 
             problemDescription: formData.get('problemDescription') as string, 
             status: OrderStatus.PENDING, 
-            quoteStatus: 'Aguardando orçamento', // Inicia na fila
+            quoteStatus: 'Aguardando orçamento', 
             history: [{ status: OrderStatus.PENDING, date: now, user: 'Recepção' }], 
             priority: formData.get('priority') as any || 'Normal', 
             laborCost: 0, partsCost: 0, totalCost: 0, partsUsed: [], 
@@ -826,16 +917,29 @@ export default function App() {
               <label className="text-[10px] font-black uppercase">Número da OS</label>
               <input name="osId" type="text" pattern="[0-9]*" inputMode="numeric" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-red-600 text-lg" placeholder="Digite o número da OS..." required />
             </div>
-            <div className="space-y-1 relative"><label className="text-[10px] font-black uppercase">1. Buscar Cliente</label><input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) { setSelectedClientId(''); setSelectedMachineId(''); } }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome do cliente..." />{showClientResults && filteredClients.length > 0 && (<div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border rounded-2xl shadow-2xl max-h-48 overflow-y-auto">{filteredClients.map(c => (<div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b">{c.name}</div>))}</div>)}</div>
+            <div className="space-y-1 relative">
+              <label className="text-[10px] font-black uppercase">1. Buscar Cliente</label>
+              <input type="text" value={clientSearch} onChange={(e) => { setClientSearch(e.target.value); setShowClientResults(true); if (selectedClientId) { setSelectedClientId(''); setSelectedMachineId(''); } }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome do cliente..." />
+              {showClientResults && filteredClients.length > 0 && (
+                <div className="absolute top-full left-0 right-0 z-[210] mt-2 bg-white border rounded-2xl shadow-2xl max-h-48 overflow-y-auto">
+                  {filteredClients.map(c => (
+                    <div key={c.id} onClick={() => { setClientSearch(c.name); setSelectedClientId(c.id); setShowClientResults(false); }} className="p-4 hover:bg-red-50 cursor-pointer font-bold border-b">{c.name}</div>
+                  ))}
+                </div>
+              )}
+            </div>
             {selectedClientId && (
-               <div className="space-y-1">
-                 <label className="text-[10px] font-black uppercase">2. Selecionar Máquina</label>
-                 <select value={selectedMachineId} onChange={(e) => setSelectedMachineId(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold">
+               <div className="space-y-1 animate-fade-in">
+                 <label className="text-[10px] font-black uppercase text-red-600">2. Selecionar Máquina do Cliente</label>
+                 <select value={selectedMachineId} onChange={(e) => setSelectedMachineId(e.target.value)} className="w-full p-4 bg-slate-50 border border-red-200 rounded-2xl font-bold focus:ring-red-500">
                     <option value="">Selecione o equipamento...</option>
                     {(clients.find(c => c.id === selectedClientId)?.machines || []).map(m => (
                       <option key={m.id} value={m.id}>{m.type} - {m.model} (SN: {m.serialNumber || 'N/A'})</option>
                     ))}
                  </select>
+                 {(clients.find(c => c.id === selectedClientId)?.machines || []).length === 0 && (
+                   <p className="text-[10px] text-red-600 font-bold mt-2">Este cliente não possui máquinas cadastradas. Use o botão Editar na aba Clientes.</p>
+                 )}
                </div>
             )}
           </div>
@@ -845,36 +949,65 @@ export default function App() {
         </form>
       </SaaSModal>
 
-      <SaaSModal isOpen={isClientModalOpen} onClose={() => setIsClientModalOpen(false)} title="Gerenciar Cliente e Máquinas">
+      <SaaSModal isOpen={isClientModalOpen} onClose={() => { setIsClientModalOpen(false); setEditingClient(null); }} title={editingClient ? "Gerenciar Cliente e Máquinas" : "Novo Cliente"}>
         <form onSubmit={(e) => { 
-          e.preventDefault(); const formData = new FormData(e.currentTarget); 
-          const newClient: Client = { id: Date.now().toString(), name: formData.get('name') as string, phone: formData.get('phone') as string, email: formData.get('email') as string, machines: clientMachinesDraft };
-          updateState('clients', [...clients, newClient]); setIsClientModalOpen(false); setClientMachinesDraft([]);
+          e.preventDefault(); 
+          const formData = new FormData(e.currentTarget); 
+          const clientData = { 
+            name: formData.get('name') as string, 
+            phone: formData.get('phone') as string, 
+            email: formData.get('email') as string, 
+            machines: clientMachinesDraft 
+          };
+          
+          if (editingClient) {
+            updateState('clients', clients.map(c => c.id === editingClient.id ? { ...c, ...clientData } : c));
+            alert('Dados do cliente e máquinas atualizados!');
+          } else {
+            const newClient: Client = { id: Date.now().toString(), ...clientData };
+            updateState('clients', [...clients, newClient]);
+            alert('Novo cliente cadastrado!');
+          }
+          setIsClientModalOpen(false); 
+          setEditingClient(null);
+          setClientMachinesDraft([]);
         }} className="space-y-6">
           <div className="space-y-4">
-            <input name="name" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Nome Completo" required />
-            <input name="phone" type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="WhatsApp" required />
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400">Nome Completo</label>
+              <input name="name" defaultValue={editingClient?.name} type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Ex: João Silva" required />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400">WhatsApp</label>
+              <input name="phone" defaultValue={editingClient?.phone} type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" placeholder="Ex: 11 99999-9999" required />
+            </div>
           </div>
           <div className="border-t pt-6 space-y-4">
-            <p className="text-[10px] font-black uppercase text-slate-400">Equipamentos do Cliente</p>
+            <p className="text-[10px] font-black uppercase text-red-600">Gerenciar Máquinas do Cliente</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              <input id="machine-type" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Tipo" />
-              <input id="machine-model" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Modelo" />
+              <input id="machine-type" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Tipo (ex: Impressora)" />
+              <input id="machine-model" type="text" className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Modelo (ex: L3250)" />
               <div className="flex gap-2">
                 <input id="machine-serial" type="text" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs" placeholder="Serial" />
-                <button type="button" onClick={handleAddMachineToDraft} className="bg-slate-900 text-white p-3 rounded-xl"><Plus size={18}/></button>
+                <button type="button" onClick={handleAddMachineToDraft} className="bg-slate-900 text-white p-3 rounded-xl hover:bg-black transition-colors"><Plus size={18}/></button>
               </div>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-40 overflow-y-auto pr-2">
               {clientMachinesDraft.map(m => (
-                <div key={m.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border">
-                  <div><p className="font-bold text-sm">{m.type} - {m.model}</p><p className="text-[10px] text-slate-400">SN: {m.serialNumber || 'N/A'}</p></div>
-                  <button type="button" onClick={() => handleRemoveMachineFromDraft(m.id)} className="text-red-600"><MinusCircle size={18}/></button>
+                <div key={m.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border border-slate-100 group">
+                  <div>
+                    <p className="font-bold text-sm text-slate-900">{m.type} - {m.model}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">SN: {m.serialNumber || 'N/A'}</p>
+                  </div>
+                  <button type="button" onClick={() => handleRemoveMachineFromDraft(m.id)} className="text-slate-300 hover:text-red-600 transition-colors"><MinusCircle size={18}/></button>
                 </div>
               ))}
+              {clientMachinesDraft.length === 0 && <p className="text-center text-slate-400 text-xs italic py-4">Nenhuma máquina vinculada a este cliente.</p>}
             </div>
           </div>
-          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl">Cadastrar Cliente</button>
+          <button type="submit" className="w-full py-4 bg-red-600 text-white font-black rounded-2xl shadow-xl hover:bg-red-700 transition-all flex items-center justify-center gap-2">
+            <Save size={20}/> {editingClient ? 'Salvar Alterações' : 'Cadastrar Cliente'}
+          </button>
         </form>
       </SaaSModal>
 
@@ -935,7 +1068,7 @@ function SaaSModal({isOpen, onClose, title, children}: any) {
   return (
     <div className="fixed inset-0 bg-slate-900/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
       <div className="bg-white w-full max-w-xl rounded-[40px] overflow-hidden shadow-2xl">
-        <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50/50"><h3 className="text-xl font-black text-slate-900 tracking-tight">{title}</h3><button onClick={onClose} className="p-2 hover:bg-white rounded-full text-slate-400"><X size={20}/></button></div>
+        <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50/50"><h3 className="text-xl font-black text-slate-900 tracking-tight">{title}</h3><button onClick={onClose} className="p-2 hover:bg-white rounded-full text-slate-400 transition-colors"><X size={20}/></button></div>
         <div className="p-10">{children}</div>
       </div>
     </div>
