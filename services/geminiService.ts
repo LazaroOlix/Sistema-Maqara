@@ -1,12 +1,20 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// Initialize the Gemini AI client with the API key from environment variables
-// Always use the named parameter and direct process.env.API_KEY access as per guidelines
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Lazy-initialization helper to avoid crashes if process.env.API_KEY is missing at runtime
+let aiInstance: GoogleGenAI | null = null;
+
+const getAI = () => {
+  if (!aiInstance) {
+    const apiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : '';
+    aiInstance = new GoogleGenAI({ apiKey: apiKey || '' });
+  }
+  return aiInstance;
+};
 
 export const getPrinterDiagnosis = async (printerModel: string, problem: string): Promise<string> => {
   try {
+    const ai = getAI();
     const prompt = `
       Você é um técnico especialista sênior em manutenção de impressoras.
       Analise o seguinte caso:
@@ -20,13 +28,11 @@ export const getPrinterDiagnosis = async (printerModel: string, problem: string)
       Mantenha a resposta concisa em Markdown.
     `;
 
-    // Call generateContent using the correct pattern: model name and contents
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
 
-    // Access the .text property directly to get the generated content
     return response.text || "Não foi possível gerar o diagnóstico.";
   } catch (error) {
     console.error("Erro Gemini:", error);
@@ -41,6 +47,7 @@ export const generateClientMessage = async (
   details: string
 ): Promise<string> => {
   try {
+    const ai = getAI();
     const prompt = `
       Escreva uma mensagem de WhatsApp curta e profissional para um cliente de assistência técnica.
       Cliente: ${clientName}
@@ -51,13 +58,11 @@ export const generateClientMessage = async (
       Não use hashtags.
     `;
 
-    // Call generateContent using the correct pattern: model name and contents
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
 
-    // Access the .text property directly to get the generated content
     return response.text || "Mensagem não gerada.";
   } catch (error) {
     console.error("Erro Gemini:", error);
